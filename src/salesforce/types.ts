@@ -126,8 +126,9 @@ export interface ShareRecord {
   Id: string;
   ParentId?: string;
   UserOrGroupId: string;
-  AccessLevel: string;
-  RowCause: string;
+  AccessLevel?: string;
+  RowCause?: string;
+  [key: string]: unknown;
 }
 
 export interface GroupRecord {

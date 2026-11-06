@@ -10,34 +10,149 @@ export interface SharingEvidenceAnalyzerResult {
   recordName?: string;
 }
 
-function getShareTableNameAndForeignKey(objectApiName: string): { shareTable: string; fkField: string } | null {
+export interface ResolvedShareTableSchema {
+  shareTable: string;
+  fkField: string;
+  accessLevelField: string;
+  hasRowCause: boolean;
+  hasUserOrGroupId: boolean;
+  relatedAccessFields: string[];
+}
+
+// Built-in standard share definitions map as robust fallback knowledge
+const STANDARD_SHARE_MAP: Record<string, { shareTable: string; fkField: string; accessLevelField: string; relatedAccessFields?: string[] }> = {
+  Account: {
+    shareTable: 'AccountShare',
+    fkField: 'AccountId',
+    accessLevelField: 'AccountAccessLevel',
+    relatedAccessFields: ['OpportunityAccessLevel', 'CaseAccessLevel', 'ContactAccessLevel'],
+  },
+  Case: {
+    shareTable: 'CaseShare',
+    fkField: 'CaseId',
+    accessLevelField: 'CaseAccessLevel',
+  },
+  Opportunity: {
+    shareTable: 'OpportunityShare',
+    fkField: 'OpportunityId',
+    accessLevelField: 'OpportunityAccessLevel',
+  },
+  Contact: {
+    shareTable: 'ContactShare',
+    fkField: 'ContactId',
+    accessLevelField: 'ContactAccessLevel',
+  },
+  Lead: {
+    shareTable: 'LeadShare',
+    fkField: 'LeadId',
+    accessLevelField: 'LeadAccessLevel',
+  },
+  Campaign: {
+    shareTable: 'CampaignShare',
+    fkField: 'CampaignId',
+    accessLevelField: 'CampaignAccessLevel',
+  },
+  User: {
+    shareTable: 'UserShare',
+    fkField: 'UserId',
+    accessLevelField: 'UserAccessLevel',
+  },
+};
+
+/**
+ * Dynamically resolves and scans the share table schema for an object:
+ * 1. Checks candidate share table name (e.g. AccountShare, Custom__Share)
+ * 2. Scans the sObject describe to inspect actual field names
+ * 3. Accurately identifies varying access fields (e.g. AccountAccessLevel vs CaseAccessLevel vs AccessLevel)
+ * 4. Accurately identifies foreign key fields (e.g. AccountId vs CaseId vs ParentId)
+ */
+export async function resolveShareTableSchema(objectApiName: string): Promise<ResolvedShareTableSchema | null> {
   const clean = objectApiName.trim();
-  if (clean.endsWith('__c')) {
+  const candidateTable = clean.endsWith('__c') ? clean.replace(/__c$/, '__Share') : `${clean}Share`;
+
+  const fallback = STANDARD_SHARE_MAP[clean] || {
+    shareTable: candidateTable,
+    fkField: clean.endsWith('__c') ? 'ParentId' : `${clean}Id`,
+    accessLevelField: clean.endsWith('__c') ? 'AccessLevel' : `${clean}AccessLevel`,
+    relatedAccessFields: [],
+  };
+
+  try {
+    const describe = await sfApi.describeSObject(candidateTable);
+    if (!describe || !describe.fields) {
+      return {
+        shareTable: fallback.shareTable,
+        fkField: fallback.fkField,
+        accessLevelField: fallback.accessLevelField,
+        hasRowCause: true,
+        hasUserOrGroupId: true,
+        relatedAccessFields: fallback.relatedAccessFields || [],
+      };
+    }
+
+    const fieldNames = new Set(describe.fields.map((f) => f.name));
+    const fieldNamesLower = new Map(describe.fields.map((f) => [f.name.toLowerCase(), f.name]));
+
+    // 1. Resolve Parent/FK field
+    let fkField = 'ParentId';
+    const specificFk = `${clean}Id`.toLowerCase();
+    if (fieldNamesLower.has(specificFk)) {
+      fkField = fieldNamesLower.get(specificFk)!;
+    } else if (fieldNamesLower.has('parentid')) {
+      fkField = fieldNamesLower.get('parentid')!;
+    } else {
+      fkField = fallback.fkField;
+    }
+
+    // 2. Resolve AccessLevel field
+    let accessLevelField = 'AccessLevel';
+    const specificAccess = `${clean}AccessLevel`.toLowerCase();
+    if (fieldNamesLower.has(specificAccess)) {
+      accessLevelField = fieldNamesLower.get(specificAccess)!;
+    } else if (fieldNamesLower.has('accesslevel')) {
+      accessLevelField = fieldNamesLower.get('accesslevel')!;
+    } else {
+      for (const [lowerName, origName] of fieldNamesLower.entries()) {
+        if (lowerName.endsWith('accesslevel')) {
+          accessLevelField = origName;
+          break;
+        }
+      }
+    }
+
+    const hasRowCause = fieldNamesLower.has('rowcause');
+    const hasUserOrGroupId = fieldNamesLower.has('userorgroupid');
+
+    // 3. Resolve any related access level fields (e.g. AccountShare: OpportunityAccessLevel, CaseAccessLevel, ContactAccessLevel)
+    const relatedAccessFields: string[] = [];
+    if (fallback.relatedAccessFields) {
+      for (const relField of fallback.relatedAccessFields) {
+        if (fieldNames.has(relField)) {
+          relatedAccessFields.push(relField);
+        }
+      }
+    }
+
     return {
-      shareTable: clean.replace(/__c$/, '__Share'),
-      fkField: 'ParentId',
+      shareTable: candidateTable,
+      fkField,
+      accessLevelField,
+      hasRowCause,
+      hasUserOrGroupId,
+      relatedAccessFields,
+    };
+  } catch {
+    // If describe fails (e.g. offline/mock testing or describe not queryable):
+    // Return standard fallback schema for standard and custom objects
+    return {
+      shareTable: fallback.shareTable,
+      fkField: fallback.fkField,
+      accessLevelField: fallback.accessLevelField,
+      hasRowCause: true,
+      hasUserOrGroupId: true,
+      relatedAccessFields: fallback.relatedAccessFields || [],
     };
   }
-
-  const standardMap: Record<string, { shareTable: string; fkField: string }> = {
-    Account: { shareTable: 'AccountShare', fkField: 'AccountId' },
-    Case: { shareTable: 'CaseShare', fkField: 'CaseId' },
-    Opportunity: { shareTable: 'OpportunityShare', fkField: 'OpportunityId' },
-    Contact: { shareTable: 'ContactShare', fkField: 'ContactId' },
-    Lead: { shareTable: 'LeadShare', fkField: 'LeadId' },
-    Campaign: { shareTable: 'CampaignShare', fkField: 'CampaignId' },
-    User: { shareTable: 'UserShare', fkField: 'UserId' },
-  };
-
-  if (standardMap[clean]) {
-    return standardMap[clean];
-  }
-
-  // Generic fallback for standard objects
-  return {
-    shareTable: `${clean}Share`,
-    fkField: 'ParentId',
-  };
 }
 
 export async function analyzeSharingEvidence(
@@ -106,14 +221,20 @@ export async function analyzeSharingEvidence(
     warnings.push(`Could not query record owner: ${errorMsg}`);
   }
 
-  // 2. Query Share Table
-  const shareConfig = getShareTableNameAndForeignKey(objectApiName);
-  if (shareConfig) {
+  // 2. Scan and Query Share Table using Dynamically Discovered Schema
+  const shareSchema = await resolveShareTableSchema(objectApiName);
+  if (shareSchema) {
     try {
+      const selectFields = ['Id', shareSchema.fkField, 'UserOrGroupId', shareSchema.accessLevelField];
+      if (shareSchema.hasRowCause) selectFields.push('RowCause');
+      if (shareSchema.relatedAccessFields.length > 0) {
+        selectFields.push(...shareSchema.relatedAccessFields);
+      }
+
       const shareSoql = `
-        SELECT Id, ${shareConfig.fkField}, UserOrGroupId, AccessLevel, RowCause
-        FROM ${shareConfig.shareTable}
-        WHERE ${shareConfig.fkField} = '${recordId}'
+        SELECT ${selectFields.join(', ')}
+        FROM ${shareSchema.shareTable}
+        WHERE ${shareSchema.fkField} = '${recordId}'
         LIMIT 200
       `;
 
@@ -128,12 +249,26 @@ export async function analyzeSharingEvidence(
         // Check Direct User Shares
         const directUserShares = shareRows.filter((r) => r.UserOrGroupId === targetUser.id);
         for (const row of directUserShares) {
+          const rawAccessLevel = String(row[shareSchema.accessLevelField] || row.AccessLevel || 'Read');
+          const rowCause = shareSchema.hasRowCause ? String(row.RowCause || 'Manual') : 'Manual';
+
+          const extraDetails: Record<string, unknown> = {
+            shareId: row.Id,
+            accessLevel: rawAccessLevel,
+            rowCause,
+            accessLevelField: shareSchema.accessLevelField,
+            foreignKeyField: shareSchema.fkField,
+          };
+          for (const relField of shareSchema.relatedAccessFields) {
+            if (row[relField]) extraDetails[relField] = row[relField];
+          }
+
           findings.push({
             type: 'share_row',
-            label: `Direct Share (${row.RowCause})`,
-            accessLevel: row.AccessLevel,
-            rowCause: row.RowCause,
-            source: shareConfig.shareTable,
+            label: `Direct Share (${rowCause})`,
+            accessLevel: rawAccessLevel,
+            rowCause,
+            source: `${shareSchema.shareTable}.${shareSchema.accessLevelField}`,
             status: 'confirmed',
           });
 
@@ -141,17 +276,13 @@ export async function analyzeSharingEvidence(
             id: `share-row-${row.Id}`,
             category: 'sharing',
             status: 'confirmed',
-            title: `Direct Share Row: ${row.RowCause}`,
-            explanation: `Found explicit share record in ${shareConfig.shareTable} granting ${row.AccessLevel} access directly to user ${targetUser.name}.`,
-            source: shareConfig.shareTable,
+            title: `Direct Share Row: ${rowCause}`,
+            explanation: `Found explicit share record in ${shareSchema.shareTable} granting ${rawAccessLevel} access directly to user ${targetUser.name} (evaluated via field ${shareSchema.accessLevelField}).`,
+            source: shareSchema.shareTable,
             retrievedAt: new Date().toISOString(),
             targetUserId: targetUser.id,
             recordId,
-            details: {
-              shareId: row.Id,
-              accessLevel: row.AccessLevel,
-              rowCause: row.RowCause,
-            },
+            details: extraDetails,
           });
         }
 
@@ -163,13 +294,27 @@ export async function analyzeSharingEvidence(
             for (const row of shareRows) {
               const matchedGroup = groupDetails.get(row.UserOrGroupId);
               if (matchedGroup && matchedGroup.isMember) {
+                const rawAccessLevel = String(row[shareSchema.accessLevelField] || row.AccessLevel || 'Read');
+                const rowCause = shareSchema.hasRowCause ? String(row.RowCause || 'Manual') : 'Manual';
+
+                const extraDetails: Record<string, unknown> = {
+                  shareId: row.Id,
+                  accessLevel: rawAccessLevel,
+                  rowCause,
+                  accessLevelField: shareSchema.accessLevelField,
+                  foreignKeyField: shareSchema.fkField,
+                };
+                for (const relField of shareSchema.relatedAccessFields) {
+                  if (row[relField]) extraDetails[relField] = row[relField];
+                }
+
                 findings.push({
                   type: 'group',
                   label: `Public Group Share (${matchedGroup.name})`,
-                  accessLevel: row.AccessLevel,
-                  rowCause: row.RowCause,
+                  accessLevel: rawAccessLevel,
+                  rowCause,
                   path: matchedGroup.path,
-                  source: `${shareConfig.shareTable} -> GroupMember`,
+                  source: `${shareSchema.shareTable} -> GroupMember`,
                   status: 'supported',
                 });
 
@@ -178,11 +323,12 @@ export async function analyzeSharingEvidence(
                   category: 'sharing',
                   status: 'supported',
                   title: `Access via Group: ${matchedGroup.name}`,
-                  explanation: `Share row grants ${row.AccessLevel} to Group/Role "${matchedGroup.name}" (${row.UserOrGroupId}). User is confirmed a member via path: ${matchedGroup.path.join(' -> ')}.`,
-                  source: `${shareConfig.shareTable} & GroupMember`,
+                  explanation: `Share row grants ${rawAccessLevel} to Group/Role "${matchedGroup.name}" (${row.UserOrGroupId}) via ${shareSchema.accessLevelField}. User is confirmed a member via path: ${matchedGroup.path.join(' -> ')}.`,
+                  source: `${shareSchema.shareTable} & GroupMember`,
                   retrievedAt: new Date().toISOString(),
                   targetUserId: targetUser.id,
                   recordId,
+                  details: extraDetails,
                 });
               }
             }
@@ -195,9 +341,9 @@ export async function analyzeSharingEvidence(
           id: `share-table-empty-${recordId}`,
           category: 'sharing',
           status: 'supported',
-          title: 'No Explicit Share Rows Found',
-          explanation: `Queried ${shareConfig.shareTable} but found 0 share records. Access may be governed by OWD, Role Hierarchy, Implicit sharing, or System permissions.`,
-          source: shareConfig.shareTable,
+          title: `No Explicit Share Rows in ${shareSchema.shareTable}`,
+          explanation: `Queried ${shareSchema.shareTable} (matching foreign key ${shareSchema.fkField} and access field ${shareSchema.accessLevelField}) but found 0 share records. Access may be governed by OWD, Role Hierarchy, Implicit sharing, or System permissions.`,
+          source: shareSchema.shareTable,
           retrievedAt: new Date().toISOString(),
           targetUserId: targetUser.id,
           recordId,
@@ -205,20 +351,33 @@ export async function analyzeSharingEvidence(
       }
     } catch (shareErr: unknown) {
       const errorMsg = shareErr instanceof Error ? shareErr.message : String(shareErr);
-      warnings.push(`Share table query not accessible (${shareConfig.shareTable}): ${errorMsg}`);
+      warnings.push(`Share table query error (${shareSchema.shareTable}): ${errorMsg}`);
       evidence.push({
         id: `share-table-unavailable-${recordId}`,
         category: 'sharing',
         status: 'unavailable',
-        title: `Share Table (${shareConfig.shareTable}) Inaccessible`,
-        explanation: `Could not query ${shareConfig.shareTable}: ${errorMsg}. Objects with Private or ControlledByParent sharing or lack of View All permissions may restrict share table access.`,
-        source: shareConfig.shareTable,
+        title: `Share Table (${shareSchema.shareTable}) Inaccessible`,
+        explanation: `Could not query ${shareSchema.shareTable}: ${errorMsg}.`,
+        source: shareSchema.shareTable,
         retrievedAt: new Date().toISOString(),
         targetUserId: targetUser.id,
         recordId,
-        limitation: 'Ensure the connected admin user has permissions to query share tables.',
+        limitation: 'Ensure connected user has permissions to query share tables.',
       });
     }
+  } else {
+    // If object has no share table (e.g. Master-Detail child or ControlledByParent)
+    evidence.push({
+      id: `share-table-not-applicable-${recordId}`,
+      category: 'sharing',
+      status: 'not_applicable',
+      title: `No Independent Share Table (${objectApiName})`,
+      explanation: `Object ${objectApiName} does not have an independent share table. Sharing is Controlled by Parent (Master-Detail) or governed directly by parent/system defaults.`,
+      source: 'Describe & Platform Sharing Architecture',
+      retrievedAt: new Date().toISOString(),
+      targetUserId: targetUser.id,
+      recordId,
+    });
   }
 
   // 3. Inspect Role Hierarchy Traversal
@@ -339,7 +498,6 @@ export async function analyzeSharingEvidence(
         });
       }
     } else {
-      // Document limitation if EntityDefinition not queryable
       evidence.push({
         id: `share-limitation-owd-${recordId}`,
         category: 'sharing',
@@ -352,7 +510,6 @@ export async function analyzeSharingEvidence(
       });
     }
   } catch {
-    // Document limitation on error
     evidence.push({
       id: `share-limitation-owd-${recordId}`,
       category: 'sharing',
@@ -413,7 +570,6 @@ async function evaluateRoleHierarchy(
   targetUserRoleName: string
 ): Promise<{ isAncestor: boolean; ownerRoleName: string; path: string[] } | null> {
   try {
-    // 1. Get Owner's UserRole
     const ownerQuery = `
       SELECT Id, UserRoleId, UserRole.Name
       FROM User
@@ -436,7 +592,6 @@ async function evaluateRoleHierarchy(
       };
     }
 
-    // 2. Fetch UserRole table
     const rolesQuery = `
       SELECT Id, Name, ParentRoleId
       FROM UserRole
@@ -448,7 +603,6 @@ async function evaluateRoleHierarchy(
       roleMap.set(r.Id, { name: r.Name, parentRoleId: r.ParentRoleId });
     }
 
-    // 3. Traverse upwards from ownerRoleId
     let currentId: string | undefined = ownerRoleId;
     const visited = new Set<string>();
     const path: string[] = [ownerRoleName];
@@ -506,7 +660,6 @@ async function resolveGroupMemberships(
     });
   }
 
-  // Query direct members
   const memberQuery = `
     SELECT Id, GroupId, UserOrGroupId
     FROM GroupMember
@@ -528,7 +681,6 @@ async function resolveGroupMemberships(
     }
   }
 
-  // Recurse for nested groups if needed
   if (nestedGroupIds.length > 0 && maxDepth > 0) {
     try {
       const nestedResults = await resolveGroupMemberships(nestedGroupIds, targetUserId, maxDepth - 1);
