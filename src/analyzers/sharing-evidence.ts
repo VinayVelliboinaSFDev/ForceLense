@@ -221,18 +221,151 @@ export async function analyzeSharingEvidence(
     }
   }
 
-  // 3. Document Known Limitations (OWD, Restriction Rules, Dynamic Forms)
-  evidence.push({
-    id: `share-limitation-owd-${recordId}`,
-    category: 'sharing',
-    status: 'unavailable',
-    title: 'Organization-Wide Defaults (OWD) Verification',
-    explanation: 'Salesforce standard REST data API does not expose org-wide default sharing settings directly without Tooling/Metadata API access. If OWD is Public Read/Write or Public Read Only, baseline access is granted automatically without explicit share rows.',
-    source: 'Metadata/Tooling API Boundary',
-    retrievedAt: new Date().toISOString(),
-    limitation: 'OWD baseline could not be directly confirmed via standard SOQL.',
-  });
+  // 3. Inspect Role Hierarchy Traversal
+  if (ownerId && ownerId.startsWith('005') && ownerId !== targetUser.id && targetUser.userRoleId) {
+    try {
+      const roleResult = await evaluateRoleHierarchy(ownerId, targetUser.userRoleId, targetUser.userRoleName || 'Target Role');
+      if (roleResult && roleResult.isAncestor) {
+        findings.push({
+          type: 'hierarchy',
+          label: 'Inherited via Role Hierarchy',
+          accessLevel: 'Read/Edit',
+          path: roleResult.path,
+          source: 'UserRole Hierarchy',
+          status: 'supported',
+        });
 
+        evidence.push({
+          id: `share-role-hierarchy-${recordId}`,
+          category: 'sharing',
+          status: 'supported',
+          title: 'Role Hierarchy Access Inherited',
+          explanation: `Target user holds role "${targetUser.userRoleName}", which is an ancestor/manager of record owner's role "${roleResult.ownerRoleName}". In Salesforce, role hierarchy automatically grants managers access to records owned by subordinates.`,
+          source: 'UserRole Hierarchy',
+          retrievedAt: new Date().toISOString(),
+          targetUserId: targetUser.id,
+          recordId,
+          details: {
+            path: roleResult.path,
+            ownerRoleName: roleResult.ownerRoleName,
+            targetRoleName: targetUser.userRoleName,
+          },
+        });
+      }
+    } catch (roleErr) {
+      warnings.push(`Role hierarchy inspection: ${roleErr instanceof Error ? roleErr.message : String(roleErr)}`);
+    }
+  }
+
+  // 4. Inspect Organization-Wide Defaults (OWD) via EntityDefinition
+  try {
+    const owdResult = await checkOwdBaseline(objectApiName);
+    if (owdResult) {
+      if (owdResult.internalSharingModel === 'ReadWrite') {
+        findings.push({
+          type: 'owd',
+          label: 'OWD: Public Read/Write',
+          accessLevel: 'Edit',
+          source: 'EntityDefinition.InternalSharingModel',
+          status: 'confirmed',
+        });
+
+        evidence.push({
+          id: `share-owd-${recordId}`,
+          category: 'sharing',
+          status: 'confirmed',
+          title: 'OWD Baseline: Public Read/Write',
+          explanation: `Salesforce EntityDefinition confirms InternalSharingModel = Public Read/Write. All active internal users receive baseline Read and Edit access without requiring individual share records.`,
+          source: 'EntityDefinition',
+          retrievedAt: new Date().toISOString(),
+          details: {
+            internalSharingModel: owdResult.internalSharingModel,
+            externalSharingModel: owdResult.externalSharingModel,
+          },
+        });
+      } else if (owdResult.internalSharingModel === 'ReadOnly') {
+        findings.push({
+          type: 'owd',
+          label: 'OWD: Public Read Only',
+          accessLevel: 'Read',
+          source: 'EntityDefinition.InternalSharingModel',
+          status: 'confirmed',
+        });
+
+        evidence.push({
+          id: `share-owd-${recordId}`,
+          category: 'sharing',
+          status: 'confirmed',
+          title: 'OWD Baseline: Public Read Only',
+          explanation: `Salesforce EntityDefinition confirms InternalSharingModel = Public Read Only. All active internal users receive baseline Read access without requiring individual share records.`,
+          source: 'EntityDefinition',
+          retrievedAt: new Date().toISOString(),
+          details: {
+            internalSharingModel: owdResult.internalSharingModel,
+            externalSharingModel: owdResult.externalSharingModel,
+          },
+        });
+      } else if (owdResult.internalSharingModel === 'Private') {
+        evidence.push({
+          id: `share-owd-${recordId}`,
+          category: 'sharing',
+          status: 'confirmed',
+          title: 'OWD Baseline: Private',
+          explanation: `Salesforce EntityDefinition confirms InternalSharingModel = Private. Access requires explicit record ownership, sharing rules, manual sharing, or role hierarchy.`,
+          source: 'EntityDefinition',
+          retrievedAt: new Date().toISOString(),
+          details: {
+            internalSharingModel: owdResult.internalSharingModel,
+            externalSharingModel: owdResult.externalSharingModel,
+          },
+        });
+      } else if (owdResult.internalSharingModel === 'ControlledByParent') {
+        findings.push({
+          type: 'owd',
+          label: 'OWD: Controlled By Parent',
+          accessLevel: 'Inherited',
+          source: 'EntityDefinition.InternalSharingModel',
+          status: 'confirmed',
+        });
+
+        evidence.push({
+          id: `share-owd-${recordId}`,
+          category: 'sharing',
+          status: 'confirmed',
+          title: 'OWD Baseline: Controlled by Parent (Master-Detail)',
+          explanation: `Salesforce EntityDefinition confirms InternalSharingModel = ControlledByParent. Sharing is inherited from the parent record.`,
+          source: 'EntityDefinition',
+          retrievedAt: new Date().toISOString(),
+        });
+      }
+    } else {
+      // Document limitation if EntityDefinition not queryable
+      evidence.push({
+        id: `share-limitation-owd-${recordId}`,
+        category: 'sharing',
+        status: 'unavailable',
+        title: 'Organization-Wide Defaults (OWD) Verification',
+        explanation: 'Salesforce standard REST data API does not expose org-wide default sharing settings directly without Tooling/Metadata API access. If OWD is Public Read/Write or Public Read Only, baseline access is granted automatically without explicit share rows.',
+        source: 'Metadata/Tooling API Boundary',
+        retrievedAt: new Date().toISOString(),
+        limitation: 'OWD baseline could not be directly confirmed via standard SOQL.',
+      });
+    }
+  } catch {
+    // Document limitation on error
+    evidence.push({
+      id: `share-limitation-owd-${recordId}`,
+      category: 'sharing',
+      status: 'unavailable',
+      title: 'Organization-Wide Defaults (OWD) Verification',
+      explanation: 'Salesforce standard REST data API does not expose org-wide default sharing settings directly without Tooling/Metadata API access. If OWD is Public Read/Write or Public Read Only, baseline access is granted automatically without explicit share rows.',
+      source: 'Metadata/Tooling API Boundary',
+      retrievedAt: new Date().toISOString(),
+      limitation: 'OWD baseline could not be directly confirmed via standard SOQL.',
+    });
+  }
+
+  // 5. Document Known Limitations (Restriction Rules & Dynamic Forms)
   evidence.push({
     id: `restriction-rule-note-${recordId}`,
     category: 'restriction',
@@ -245,6 +378,106 @@ export async function analyzeSharingEvidence(
   });
 
   return { findings, evidence, warnings, ownerId, recordName };
+}
+
+/**
+ * Checks OWD baseline via EntityDefinition query
+ */
+async function checkOwdBaseline(objectApiName: string): Promise<{ internalSharingModel: string; externalSharingModel?: string } | null> {
+  try {
+    const soql = `
+      SELECT QualifiedApiName, InternalSharingModel, ExternalSharingModel
+      FROM EntityDefinition
+      WHERE QualifiedApiName = '${objectApiName}'
+      LIMIT 1
+    `;
+    const res = await sfApi.query<{ QualifiedApiName: string; InternalSharingModel: string; ExternalSharingModel?: string }>(soql);
+    if (res && res.length > 0 && res[0].InternalSharingModel) {
+      return {
+        internalSharingModel: res[0].InternalSharingModel,
+        externalSharingModel: res[0].ExternalSharingModel,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Evaluates whether target user's role is an ancestor of record owner's role in the hierarchy
+ */
+async function evaluateRoleHierarchy(
+  ownerUserId: string,
+  targetUserRoleId: string,
+  targetUserRoleName: string
+): Promise<{ isAncestor: boolean; ownerRoleName: string; path: string[] } | null> {
+  try {
+    // 1. Get Owner's UserRole
+    const ownerQuery = `
+      SELECT Id, UserRoleId, UserRole.Name
+      FROM User
+      WHERE Id = '${ownerUserId}'
+      LIMIT 1
+    `;
+    const ownerRecs = await sfApi.query<{ Id: string; UserRoleId?: string; UserRole?: { Name: string } }>(ownerQuery);
+    if (!ownerRecs || ownerRecs.length === 0 || !ownerRecs[0].UserRoleId) {
+      return null;
+    }
+
+    const ownerRoleId = ownerRecs[0].UserRoleId;
+    const ownerRoleName = ownerRecs[0].UserRole?.Name || 'Owner Role';
+
+    if (ownerRoleId === targetUserRoleId) {
+      return {
+        isAncestor: false,
+        ownerRoleName,
+        path: [ownerRoleName],
+      };
+    }
+
+    // 2. Fetch UserRole table
+    const rolesQuery = `
+      SELECT Id, Name, ParentRoleId
+      FROM UserRole
+      LIMIT 1000
+    `;
+    const roles = await sfApi.query<{ Id: string; Name: string; ParentRoleId?: string }>(rolesQuery);
+    const roleMap = new Map<string, { name: string; parentRoleId?: string }>();
+    for (const r of roles) {
+      roleMap.set(r.Id, { name: r.Name, parentRoleId: r.ParentRoleId });
+    }
+
+    // 3. Traverse upwards from ownerRoleId
+    let currentId: string | undefined = ownerRoleId;
+    const visited = new Set<string>();
+    const path: string[] = [ownerRoleName];
+    let isAncestor = false;
+
+    while (currentId && !visited.has(currentId) && visited.size < 50) {
+      visited.add(currentId);
+      const node = roleMap.get(currentId);
+      if (!node || !node.parentRoleId) break;
+
+      const parentNode = roleMap.get(node.parentRoleId);
+      const parentName = parentNode?.name || node.parentRoleId;
+      path.push(parentName);
+
+      if (node.parentRoleId === targetUserRoleId) {
+        isAncestor = true;
+        break;
+      }
+      currentId = node.parentRoleId;
+    }
+
+    return {
+      isAncestor,
+      ownerRoleName,
+      path: isAncestor ? path.reverse() : path,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
