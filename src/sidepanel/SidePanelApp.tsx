@@ -26,6 +26,7 @@ import {
 } from '../types';
 import { getOrgConnection, disconnectSession } from '../auth/token-store';
 import { initiateOAuthFlow } from '../auth/oauth';
+import { autoDetectSalesforceSession } from '../auth/salesforce-session';
 import { runFullAnalysis } from '../analyzers/orchestrator';
 import {
   Play,
@@ -60,8 +61,16 @@ export const SidePanelApp: React.FC = () => {
 
   // Load initial connection and record context
   useEffect(() => {
-    getOrgConnection().then((conn) => {
-      if (conn) setConnection(conn);
+    // 1. Automatically detect active Salesforce session from current tab (Salesforce Inspector style)
+    autoDetectSalesforceSession().then((autoRes) => {
+      if (autoRes) {
+        setConnection(autoRes.connection);
+      } else {
+        // Fallback to previously stored connection
+        getOrgConnection().then((conn) => {
+          if (conn) setConnection(conn);
+        });
+      }
     });
 
     // Request active record context from background service worker
@@ -77,6 +86,10 @@ export const SidePanelApp: React.FC = () => {
     const messageListener = (msg: { type: string; payload?: SalesforceRecordContext }) => {
       if (msg?.type === 'RECORD_DETECTED' && msg.payload) {
         setRecordContext(msg.payload);
+        // Also re-verify session for new record tab
+        autoDetectSalesforceSession().then((autoRes) => {
+          if (autoRes) setConnection(autoRes.connection);
+        });
       }
     };
 
@@ -103,6 +116,11 @@ export const SidePanelApp: React.FC = () => {
   };
 
   const handleRefreshContext = () => {
+    // Re-detect both active session and record context from tab
+    autoDetectSalesforceSession().then((autoRes) => {
+      if (autoRes) setConnection(autoRes.connection);
+    });
+
     if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
       chrome.runtime.sendMessage({ type: 'GET_RECORD_CONTEXT' }, (res) => {
         if (res?.context) {
@@ -356,6 +374,11 @@ export const SidePanelApp: React.FC = () => {
         onClose={() => setIsConnectOpen(false)}
         onConnect={handleConnectOrg}
         onEnableMockMode={() => handleToggleMockMode(true)}
+        onAutoConnected={() => {
+          getOrgConnection().then((conn) => {
+            if (conn) setConnection(conn);
+          });
+        }}
       />
 
       <SettingsModal

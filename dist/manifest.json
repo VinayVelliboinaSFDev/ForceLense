@@ -8,7 +8,8 @@
     "identity",
     "sidePanel",
     "activeTab",
-    "tabs"
+    "tabs",
+    "cookies"
   ],
   "host_permissions": [
     "https://*.salesforce.com/*",

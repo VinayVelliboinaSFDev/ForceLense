@@ -62,6 +62,7 @@ export interface PermissionSetAssignmentRecord {
   Id: string;
   AssigneeId: string;
   PermissionSetId: string;
+  PermissionSetGroupId?: string;
   PermissionSet: {
     Id: string;
     Name: string;
@@ -74,6 +75,20 @@ export interface PermissionSetAssignmentRecord {
     PermissionsViewAllData?: boolean;
     PermissionsModifyAllData?: boolean;
   };
+}
+
+export interface PermissionSetGroupRecord {
+  Id: string;
+  DeveloperName: string;
+  MasterLabel: string;
+  Status?: string;
+}
+
+export interface MutingPermissionSetRecord {
+  Id: string;
+  DeveloperName?: string;
+  MasterLabel?: string;
+  PermissionSetGroupId?: string;
 }
 
 export interface ObjectPermissionsRecord {

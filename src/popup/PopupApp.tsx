@@ -6,6 +6,7 @@ import { SettingsModal } from '../components/SettingsModal';
 import { SalesforceRecordContext, OrgConnection, OrgType } from '../types';
 import { getOrgConnection, disconnectSession } from '../auth/token-store';
 import { initiateOAuthFlow } from '../auth/oauth';
+import { autoDetectSalesforceSession } from '../auth/salesforce-session';
 import { ExternalLink, ShieldAlert, Sparkles, CheckCircle2, ArrowRight } from 'lucide-react';
 import { MOCK_ORG_CONNECTION, MOCK_RECORD_CONTEXT } from '../components/MockData';
 
@@ -17,8 +18,15 @@ export const PopupApp: React.FC = () => {
   const [isMockMode, setIsMockMode] = useState(false);
 
   useEffect(() => {
-    getOrgConnection().then((conn) => {
-      if (conn) setConnection(conn);
+    // Automatically detect active Salesforce session from current tab (Salesforce Inspector style)
+    autoDetectSalesforceSession().then((autoRes) => {
+      if (autoRes) {
+        setConnection(autoRes.connection);
+      } else {
+        getOrgConnection().then((conn) => {
+          if (conn) setConnection(conn);
+        });
+      }
     });
 
     if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
@@ -38,6 +46,10 @@ export const PopupApp: React.FC = () => {
   };
 
   const handleRefreshContext = () => {
+    autoDetectSalesforceSession().then((autoRes) => {
+      if (autoRes) setConnection(autoRes.connection);
+    });
+
     if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
       chrome.runtime.sendMessage({ type: 'GET_RECORD_CONTEXT' }, (res) => {
         if (res?.context) {
@@ -143,6 +155,11 @@ export const PopupApp: React.FC = () => {
         onClose={() => setIsConnectOpen(false)}
         onConnect={handleConnectOrg}
         onEnableMockMode={() => handleToggleMockMode(true)}
+        onAutoConnected={() => {
+          getOrgConnection().then((conn) => {
+            if (conn) setConnection(conn);
+          });
+        }}
       />
 
       <SettingsModal

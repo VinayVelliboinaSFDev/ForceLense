@@ -1,5 +1,6 @@
 import { SalesforceRecordContext } from '../types';
 import { detectRecordFromUrl } from '../content/record-detector';
+import { autoDetectSalesforceSession } from '../auth/salesforce-session';
 
 const STORAGE_KEY_RECORD = 'forcelens_active_record_session';
 
@@ -22,7 +23,7 @@ async function getActiveRecord(): Promise<SalesforceRecordContext | null> {
   return null;
 }
 
-// Check current active tab for Salesforce record context
+// Check current active tab for Salesforce record context & session
 async function checkActiveTabContext() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -33,6 +34,11 @@ async function checkActiveTabContext() {
           detected.recordName = tab.title.replace(/\s*\|\s*Salesforce.*$/i, '').trim();
         }
         await setActiveRecord(detected);
+      }
+
+      // If on Salesforce tab, automatically verify and prepare the session in background
+      if (tab.url.includes('salesforce.com') || tab.url.includes('force.com')) {
+        await autoDetectSalesforceSession(tab.url);
       }
     }
   } catch {
@@ -56,6 +62,10 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
         }
         setActiveRecord(detected);
       }
+
+      if (tab.url.includes('salesforce.com') || tab.url.includes('force.com')) {
+        autoDetectSalesforceSession(tab.url);
+      }
     }
   }
 });
@@ -72,6 +82,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'GET_RECORD_CONTEXT') {
     getActiveRecord().then((context) => {
       sendResponse({ context });
+    });
+    return true;
+  }
+
+  if (message?.type === 'AUTO_CONNECT_SESSION') {
+    autoDetectSalesforceSession().then((result) => {
+      sendResponse({ success: !!result, connection: result?.connection || null });
+    }).catch(() => {
+      sendResponse({ success: false, connection: null });
     });
     return true;
   }
@@ -102,7 +121,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Side Panel behavior configuration
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel && 'setPanelBehavior' in chrome.sidePanel) {
-    // Allows Side Panel to be opened via action or toolbar
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
   }
 });
