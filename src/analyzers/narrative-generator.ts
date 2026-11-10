@@ -1,17 +1,20 @@
 import { AnalysisResult } from '../types';
 
-export interface NarrativeSummary {
+export interface ExactAccessProvenance {
   headline: string;
   badgeType: 'granted' | 'partial' | 'denied' | 'unknown';
-  recordVerdict: string;
-  grantSourceSummary: string;
-  objectCrudSummary: string;
-  flsSummary: string;
-  blockerSummary?: string;
-  remediationSuggestions: string[];
+  userRecordAccessFact: string;
+  sharingRowFact: string;
+  objectCrudFact: string;
+  flsFact: string;
+  blockerFact?: string;
 }
 
-export function generateNarrativeSummary(result: AnalysisResult): NarrativeSummary {
+/**
+ * Generates exact, non-speculative access provenance facts based strictly on verified API evidence.
+ * Zero placeholder or imaginary data.
+ */
+export function generateNarrativeSummary(result: AnalysisResult): ExactAccessProvenance {
   const { targetUserName, objectApiName, recordAccess, objectPermissions, fieldPermissions, sharingFindings } = result;
 
   const canRead = recordAccess?.read === true;
@@ -38,17 +41,19 @@ export function generateNarrativeSummary(result: AnalysisResult): NarrativeSumma
     badgeType = 'unknown';
   }
 
-  // 1. Record Verdict
-  const verdictParts = [];
-  if (canRead) verdictParts.push('View/Read');
-  if (canEdit) verdictParts.push('Edit');
-  if (canDelete) verdictParts.push('Delete');
-  const recordVerdict = verdictParts.length > 0
-    ? `User is confirmed to have ${verdictParts.join(' & ')} access at the record level (MaxAccessLevel: ${recordAccess?.maxAccessLevel || 'Unknown'}).`
-    : 'User does not have confirmed record-level visibility.';
+  // 1. UserRecordAccess API Fact
+  const confirmedFlags: string[] = [];
+  if (recordAccess?.read !== undefined) confirmedFlags.push(`Read: ${recordAccess.read ? 'Yes' : 'No'}`);
+  if (recordAccess?.edit !== undefined) confirmedFlags.push(`Edit: ${recordAccess.edit ? 'Yes' : 'No'}`);
+  if (recordAccess?.delete !== undefined) confirmedFlags.push(`Delete: ${recordAccess.delete ? 'Yes' : 'No'}`);
+  if (recordAccess?.maxAccessLevel) confirmedFlags.push(`MaxAccessLevel: ${recordAccess.maxAccessLevel}`);
 
-  // 2. Grant Source: Where did access come from?
-  let grantSourceSummary = '';
+  const userRecordAccessFact = confirmedFlags.length > 0
+    ? `Salesforce UserRecordAccess reports: ${confirmedFlags.join(', ')}.`
+    : 'UserRecordAccess flags were not returned for this object.';
+
+  // 2. Sharing & Group Membership Fact
+  let sharingRowFact = '';
   const isDirectOwner = sharingFindings.some(
     (f) => f.type === 'ownership' && (f.label === 'Direct Record Owner' || f.label.includes(targetUserName))
   );
@@ -58,73 +63,61 @@ export function generateNarrativeSummary(result: AnalysisResult): NarrativeSumma
   const owdFinding = sharingFindings.find((f) => f.type === 'owd');
 
   if (isDirectOwner) {
-    grantSourceSummary = `Direct Ownership: ${targetUserName} is the direct owner of this record, granting Full access under standard Salesforce sharing.`;
+    sharingRowFact = `Ownership: ${targetUserName} is the verified OwnerId on this record (grants All access).`;
   } else if (directShare) {
-    grantSourceSummary = `Explicit Share Row: Access is granted directly to ${targetUserName} via a share row in ${directShare.source} (${directShare.rowCause || 'Manual'}).`;
+    sharingRowFact = `Share Row: Found direct share row in ${directShare.source} granting ${directShare.accessLevel} (RowCause: ${directShare.rowCause || 'Manual'}).`;
   } else if (groupShare) {
-    const pathStr = groupShare.path ? ` via membership path: ${groupShare.path.join(' → ')}` : '';
-    grantSourceSummary = `Public Group / Rule: Access is granted to Public Group "${groupShare.label}"${pathStr}.`;
+    const path = groupShare.path && groupShare.path.length > 0 ? ` [Chain: ${groupShare.path.join(' → ')}]` : '';
+    sharingRowFact = `Public Group Share: Matched share row for "${groupShare.label}" granting ${groupShare.accessLevel} (RowCause: ${groupShare.rowCause || 'Rule'})${path}.`;
   } else if (hierarchyShare) {
-    grantSourceSummary = `Role Hierarchy: Access is inherited because ${targetUserName}'s role is an ancestor of the record owner in the role hierarchy.`;
+    const path = hierarchyShare.path && hierarchyShare.path.length > 0 ? ` [Role Path: ${hierarchyShare.path.join(' → ')}]` : '';
+    sharingRowFact = `Role Hierarchy: Inherited access because user's role is above record owner's role in UserRole hierarchy${path}.`;
   } else if (owdFinding) {
-    grantSourceSummary = `Baseline Organization-Wide Defaults: Access is provided by the ${owdFinding.label} baseline model.`;
-  } else if (canRead) {
-    grantSourceSummary = `Salesforce UserRecordAccess confirms visibility, but no explicit share row was found. Access is likely granted via Organization-Wide Defaults or System Administrator privileges.`;
+    sharingRowFact = `OWD Baseline: EntityDefinition confirms InternalSharingModel is ${owdFinding.label}.`;
   } else {
-    grantSourceSummary = `No active grant path was found on the share table or via role hierarchy for this record.`;
+    sharingRowFact = `No share row found on the share table for ${targetUserName} or their assigned groups. Record-level access is governed by OWD or system permissions.`;
   }
 
-  // 3. Object CRUD Summary
+  // 3. Object-level CRUD Fact
   const grantedCrud: string[] = [];
   if (objectPermissions.read) grantedCrud.push('Read');
   if (objectPermissions.create) grantedCrud.push('Create');
   if (objectPermissions.edit) grantedCrud.push('Edit');
   if (objectPermissions.delete) grantedCrud.push('Delete');
-  if (objectPermissions.viewAll) grantedCrud.push('View All Records');
-  if (objectPermissions.modifyAll) grantedCrud.push('Modify All Records');
+  if (objectPermissions.viewAll) grantedCrud.push('View All');
+  if (objectPermissions.modifyAll) grantedCrud.push('Modify All');
 
-  const objectCrudSummary = grantedCrud.length > 0
-    ? `Object-level permissions: Granted [${grantedCrud.join(', ')}] across assigned profile and permission sets.`
-    : `Object-level permissions: No CRUD access granted for object ${objectApiName}.`;
+  const objectCrudFact = grantedCrud.length > 0
+    ? `Object permissions: Granted [${grantedCrud.join(', ')}] via assigned Profile and Permission Sets.`
+    : `Object permissions: No CRUD permissions granted on object ${objectApiName}.`;
 
-  // 4. Field-Level Security Summary
+  // 4. Field-Level Security Fact
   const readableCount = fieldPermissions.filter((f) => f.readable === true).length;
   const editableCount = fieldPermissions.filter((f) => f.editable === true).length;
-  const restrictedFields = fieldPermissions.filter((f) => f.readable === false).map((f) => f.label || f.fieldApiName);
+  const restrictedFields = fieldPermissions
+    .filter((f) => f.readable === false)
+    .map((f) => (f.label && f.label !== f.fieldApiName ? `${f.label} (${f.fieldApiName})` : f.fieldApiName));
 
-  let flsSummary = `${readableCount} of ${fieldPermissions.length} fields are readable (${editableCount} editable).`;
+  let flsFact = `Field security: ${readableCount} of ${fieldPermissions.length} fields readable, ${editableCount} editable.`;
   if (restrictedFields.length > 0) {
-    flsSummary += ` Restricted fields: ${restrictedFields.slice(0, 3).join(', ')}${restrictedFields.length > 3 ? ` and ${restrictedFields.length - 3} more` : ''}.`;
+    flsFact += ` Restricted fields: ${restrictedFields.slice(0, 3).join(', ')}${restrictedFields.length > 3 ? ` (+${restrictedFields.length - 3} more)` : ''}.`;
   }
 
-  // 5. Blocker Summary (Why can't user edit/delete if object allows it?)
-  let blockerSummary: string | undefined = undefined;
+  // 5. Exact Blocker Fact
+  let blockerFact: string | undefined = undefined;
   if (canRead && !canEdit && objectPermissions.edit) {
-    blockerSummary = `Record Edit is blocked: Although ${targetUserName} has object-level Edit permissions on ${objectApiName}, they do not have Edit access to this specific record because they are not the record owner and no Read/Write share row exists.`;
+    blockerFact = `Record Edit blocked: User has object-level Edit on ${objectApiName}, but lacks an Edit grant on this specific record (no Read/Write share row, not record owner).`;
   } else if (!canRead && objectPermissions.read) {
-    blockerSummary = `Record Read is blocked: Although the user has object-level Read permission on ${objectApiName}, the record's sharing model (OWD / Private) has not shared this specific record with them.`;
-  }
-
-  // 6. Actionable Remediation Suggestions for Admins
-  const remediationSuggestions: string[] = [];
-  if (!canRead) {
-    remediationSuggestions.push(`To grant Read access: Add a manual share on ${objectApiName} for ${targetUserName}, or add them to a Public Group included in a Sharing Rule.`);
-  }
-  if (canRead && !canEdit) {
-    remediationSuggestions.push(`To grant Edit access: Change the record share level to 'Read/Write', add a Sharing Rule granting Edit, or transfer record ownership.`);
-  }
-  if (restrictedFields.length > 0) {
-    remediationSuggestions.push(`To grant access to restricted fields: Assign a Permission Set granting Field-Level Security for ${restrictedFields.slice(0, 2).join(', ')}.`);
+    blockerFact = `Record Read blocked: User has object-level Read on ${objectApiName}, but the record has not been shared with them under the current sharing model.`;
   }
 
   return {
     headline,
     badgeType,
-    recordVerdict,
-    grantSourceSummary,
-    objectCrudSummary,
-    flsSummary,
-    blockerSummary,
-    remediationSuggestions,
+    userRecordAccessFact,
+    sharingRowFact,
+    objectCrudFact,
+    flsFact,
+    blockerFact,
   };
 }

@@ -3,26 +3,31 @@ import { generateAiPrompt } from '../src/analyzers/ai-prompt-generator';
 import { MOCK_ANALYSIS_RESULT } from '../src/components/MockData';
 
 describe('AI Security Prompt Generator', () => {
-  it('generates a complete, structured prompt for external AI apps', () => {
+  it('generates a concise, straight and strong prompt for external AI apps', () => {
     const prompt = generateAiPrompt(MOCK_ANALYSIS_RESULT);
 
-    // Section verifications
-    expect(prompt).toContain('# Salesforce Security & Record Access Analysis Request');
-    expect(prompt).toContain('## 1. Context Information');
+    // Header and context
+    expect(prompt).toContain('# Salesforce Access Summary & Provenance Request');
     expect(prompt).toContain('Case');
     expect(prompt).toContain('5007Q00000abc12345');
     expect(prompt).toContain('Alex Rivera');
-    expect(prompt).toContain('## 2. Effective Record Access (UserRecordAccess API Evidence)');
-    expect(prompt).toContain('**HasReadAccess**: true');
-    expect(prompt).toContain('**HasEditAccess**: false');
-    expect(prompt).toContain('## 3. Object-Level CRUD Permissions');
-    expect(prompt).toContain('## 4. Field-Level Security (FLS) Summary');
+
+    // Section 1: Context & Verified Signals
+    expect(prompt).toContain('## 1. Context & Verified Signals');
+    expect(prompt).toContain('UserRecordAccess API');
+    expect(prompt).toContain('Read: true');
+    expect(prompt).toContain('Edit: false');
+    expect(prompt).toContain('Object CRUD (Case)');
+    expect(prompt).toContain('Field-Level Security (FLS)');
     expect(prompt).toContain('Internal_Comments__c');
-    expect(prompt).toContain('## 5. Sharing Evidence & Grant Paths');
+
+    // Section 2: Share Table & Hierarchy Findings
+    expect(prompt).toContain('## 2. Share Table & Hierarchy Findings');
     expect(prompt).toContain('Global Support Tier 1');
-    expect(prompt).toContain('## 6. Known Limitations & Platform Boundaries');
-    expect(prompt).toContain('## Instructions for your response:');
-    expect(prompt).toContain('Remediation Action Plan');
+
+    // Required response sections: Exact Access Verdict & Exact Access Provenance
+    expect(prompt).toContain('### 1. Exact Access Verdict');
+    expect(prompt).toContain('### 2. Exact Access Provenance (How Access Came)');
   });
 
   it('guarantees tokens and sensitive secrets are never included in the prompt', () => {

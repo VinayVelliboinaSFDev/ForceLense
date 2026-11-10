@@ -1,5 +1,9 @@
 import { AnalysisResult } from '../types';
 
+/**
+ * Generates a concise, straight, and strong prompt for external AI apps (ChatGPT, Claude, Copilot, Gemini).
+ * Formatted to produce an exact summary of permissions and exact access provenance without unnecessary fluff.
+ */
 export function generateAiPrompt(result: AnalysisResult): string {
   const {
     objectApiName,
@@ -11,88 +15,60 @@ export function generateAiPrompt(result: AnalysisResult): string {
     objectPermissions,
     fieldPermissions,
     sharingFindings,
-    evidence,
     limitations,
   } = result;
 
   const restrictedFields = fieldPermissions.filter((f) => f.readable === false);
   const editableFields = fieldPermissions.filter((f) => f.editable === true);
 
-  return `# Salesforce Security & Record Access Analysis Request
+  return `# Salesforce Access Summary & Provenance Request
 
-You are an expert Salesforce Certified Technical Architect (CTA) and Security Specialist.
-Analyze the following evidence collected directly from the Salesforce REST API and explain the access model, the exact grant paths, why restrictions apply, and how an administrator can modify or grant access.
-
----
-
-## 1. Context Information
-- **Salesforce Object**: ${objectApiName}
-- **Record ID**: ${recordId}
-- **Record Name**: ${recordName || 'N/A'}
-- **Target User**: ${targetUserName} (User ID: ${targetUserId})
-- **Analysis Timestamp**: ${result.completedAt || result.startedAt}
+Analyze this verified Salesforce REST API evidence for **${targetUserName}** on **${objectApiName}** (${recordId}).
+Answer strictly and concisely in a direct, strong context. Avoid generic introductions, pleasantries, and lengthy Salesforce tutorials.
 
 ---
 
-## 2. Effective Record Access (UserRecordAccess API Evidence)
-- **HasReadAccess**: ${recordAccess?.read ?? 'Unknown'}
-- **HasEditAccess**: ${recordAccess?.edit ?? 'Unknown'}
-- **HasDeleteAccess**: ${recordAccess?.delete ?? 'Unknown'}
-- **HasTransferAccess**: ${recordAccess?.transfer ?? 'Unknown'}
-- **HasAllAccess**: ${recordAccess?.all ?? 'Unknown'}
-- **MaxAccessLevel**: ${recordAccess?.maxAccessLevel ?? 'Unknown'}
-
----
-
-## 3. Object-Level CRUD Permissions (${objectApiName})
-- **Read**: ${objectPermissions.read}
-- **Create**: ${objectPermissions.create}
-- **Edit**: ${objectPermissions.edit}
-- **Delete**: ${objectPermissions.delete}
-- **View All Records**: ${objectPermissions.viewAll}
-- **Modify All Records**: ${objectPermissions.modifyAll}
-
----
-
-## 4. Field-Level Security (FLS) Summary
-- **Total Fields Analyzed**: ${fieldPermissions.length}
-- **Editable Fields**: ${editableFields.length}
-- **Restricted/Hidden Fields (${restrictedFields.length})**: ${
+## 1. Context & Verified Signals
+- **Record**: ${objectApiName} [${recordId}] ${recordName ? `("${recordName}")` : ''}
+- **User**: ${targetUserName} (ID: ${targetUserId})
+- **UserRecordAccess API**: Read: ${recordAccess?.read ?? 'Unknown'} | Edit: ${recordAccess?.edit ?? 'Unknown'} | Delete: ${recordAccess?.delete ?? 'Unknown'} | Transfer: ${recordAccess?.transfer ?? 'Unknown'} | MaxAccessLevel: ${recordAccess?.maxAccessLevel ?? 'Unknown'}
+- **Object CRUD (${objectApiName})**: Read: ${objectPermissions.read} | Create: ${objectPermissions.create} | Edit: ${objectPermissions.edit} | Delete: ${objectPermissions.delete} | ViewAll: ${objectPermissions.viewAll} | ModifyAll: ${objectPermissions.modifyAll}
+- **Field-Level Security (FLS)**: ${fieldPermissions.length - restrictedFields.length}/${fieldPermissions.length} fields readable, ${editableFields.length} editable.${
     restrictedFields.length > 0
-      ? restrictedFields.map((f) => `\`${f.fieldApiName}\` (${f.label})`).join(', ')
-      : 'None (all fields readable)'
+      ? ` Restricted: ${restrictedFields.map((f) => f.fieldApiName).join(', ')}`
+      : ' All fields readable.'
   }
 
----
-
-## 5. Sharing Evidence & Grant Paths
+## 2. Share Table & Hierarchy Findings
 ${
   sharingFindings.length > 0
     ? sharingFindings
         .map(
           (f, idx) =>
-            `${idx + 1}. **[${f.status.toUpperCase()}] ${f.label}**\n   - Access Level: ${f.accessLevel}\n   - RowCause: ${
+            `${idx + 1}. [${f.status.toUpperCase()}] ${f.label} -> AccessLevel: ${f.accessLevel} (RowCause: ${
               f.rowCause || 'N/A'
-            }\n   - Source: \`${f.source}\`${
-              f.path && f.path.length > 0 ? `\n   - Resolved Path: ${f.path.join(' → ')}` : ''
-            }`
+            }, Source: ${f.source}${f.path && f.path.length > 0 ? `, Path: ${f.path.join(' → ')}` : ''})`
         )
-        .join('\n\n')
-    : 'No explicit share table rows found. Access may be governed by OWD (Org-Wide Defaults) or System Administrator privileges.'
+        .join('\n')
+    : 'No share table rows found. Access governed by OWD or system admin permissions.'
 }
 
+${
+  limitations.length > 0
+    ? `## 3. Platform Limitations\n${limitations.map((l) => `- ${l}`).join('\n')}\n`
+    : ''
+}
 ---
 
-## 6. Known Limitations & Platform Boundaries
-${limitations.map((l) => `- ${l}`).join('\n')}
+## Required Response Format (Keep Simple, Straight & Strong):
+Provide ONLY the following 2 bulleted sections:
 
----
+### 1. Exact Access Verdict
+- Clear, 1-2 sentence statement of what ${targetUserName} can and cannot do on this record (Read, Edit, Delete, FLS).
 
-## Instructions for your response:
-1. **Executive Verdict**: Summarize what ${targetUserName} can and cannot do on this record in plain English.
-2. **Access Root Cause**: Detail exactly *how* and *where* their access originated (Profile vs. Permission Set vs. Share Table vs. Role Hierarchy vs. OWD).
-3. **Blockers & Discrepancies**: If the user has object Edit but cannot edit this record (or if FLS hides specific fields), clearly explain why.
-4. **Remediation Action Plan**: Provide exact, step-by-step instructions for a Salesforce Administrator on how to grant Edit/Delete access or unblock fields if needed (including Salesforce Setup click-paths and sharing rule configurations).
+### 2. Exact Access Provenance (How Access Came)
+- Bullet points detailing exactly how and where each access originated (Record Ownership, Share table row, Public Group / Role chain, Profile/Permission Set CRUD, or OWD).
+- If any permission discrepancy exists (e.g. Object Edit granted but Record Edit blocked), state the exact missing link.
 `;
 }
 
@@ -105,8 +81,6 @@ export function openExternalAiApp(app: 'chatgpt' | 'claude' | 'copilot' | 'gemin
   let targetUrl = '';
   switch (app) {
     case 'chatgpt':
-      // ChatGPT allows pre-filling the prompt via URL query param 'q' (for up to ~2KB)
-      // We encode a concise version or full query
       if (promptText.length < 1800) {
         targetUrl = `https://chatgpt.com/?q=${encodeURIComponent(promptText)}`;
       } else {
