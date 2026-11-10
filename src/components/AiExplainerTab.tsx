@@ -82,11 +82,11 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({
   }, [currentContextKey]);
 
   useEffect(() => {
-    // Scroll smoothly to bottom when new messages arrive
+    // Scroll smoothly to bottom when new messages arrive or when error occurs
     if (chatMessages.length > 0) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [chatMessages, isGenerating, isQueryingSalesforce]);
+  }, [chatMessages, isGenerating, isQueryingSalesforce, executionError]);
 
   const triggerToast = (msg: string) => {
     setActiveToast(msg);
@@ -492,8 +492,8 @@ ForceLens will automatically execute your read-only SOQL query against Salesforc
         )}
       </div>
 
-      {/* Execution Error Notice */}
-      {executionError && (
+      {/* Execution Error Notice (when no chat started yet) */}
+      {executionError && chatMessages.length === 0 && (
         <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 space-y-1.5 animate-in fade-in duration-150">
           <div className="font-bold text-xs flex items-center justify-between">
             <span className="flex items-center">
@@ -636,6 +636,33 @@ ForceLens will automatically execute your read-only SOQL query against Salesforc
                 <span className="font-medium text-[11px]">
                   ForceLens Copilot is analyzing Salesforce security rules and drafting remediation...
                 </span>
+              </div>
+            )}
+
+            {/* In-Chat Execution Error Notice (Rendered directly under the chat) */}
+            {executionError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 space-y-1.5 animate-in fade-in duration-150">
+                <div className="font-bold text-xs flex items-center justify-between">
+                  <span className="flex items-center">
+                    <AlertCircle className="w-4 h-4 mr-1.5 text-rose-600 shrink-0" />
+                    AI Execution Notice
+                  </span>
+                  <button
+                    onClick={() => setExecutionError(null)}
+                    className="text-rose-500 hover:text-rose-700 text-[10px] font-bold cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+                <p className="text-[11px] leading-relaxed font-mono">{executionError}</p>
+                {onOpenSettings && (
+                  <button
+                    onClick={onOpenSettings}
+                    className="mt-1 text-[11px] font-bold text-rose-800 underline block cursor-pointer"
+                  >
+                    Configure API Keys / Models in Settings →
+                  </button>
+                )}
               </div>
             )}
 
