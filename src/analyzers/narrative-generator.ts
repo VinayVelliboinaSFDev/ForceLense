@@ -1,5 +1,26 @@
 import { AnalysisResult } from '../types';
 
+export interface ProvenanceBreadcrumbNode {
+  id: string;
+  type: 'user' | 'role' | 'group' | 'share' | 'verdict';
+  label: string;
+  subLabel?: string;
+  status: 'active' | 'denied' | 'neutral';
+}
+
+export interface CausalAccessAttribution {
+  groups: string[];
+  roles: string[];
+  sharingSettings: Array<{
+    table: string;
+    rowCause: string;
+    accessLevel: string;
+    label?: string;
+  }>;
+  profiles: string[];
+  permissionSets: string[];
+}
+
 export interface ExactAccessProvenance {
   headline: string;
   badgeType: 'granted' | 'partial' | 'denied' | 'unknown';
@@ -8,11 +29,13 @@ export interface ExactAccessProvenance {
   objectCrudFact: string;
   flsFact: string;
   blockerFact?: string;
+  breadcrumbNodes: ProvenanceBreadcrumbNode[];
+  attribution: CausalAccessAttribution;
 }
 
 /**
  * Generates exact, non-speculative access provenance facts based strictly on verified API evidence.
- * Zero placeholder or imaginary data.
+ * Extracts causal public groups, roles, sharing settings, profiles, and permission sets.
  */
 export function generateNarrativeSummary(result: AnalysisResult): ExactAccessProvenance {
   const { targetUserName, objectApiName, recordAccess, objectPermissions, fieldPermissions, sharingFindings } = result;
@@ -111,6 +134,198 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
     blockerFact = `Record Read blocked: User has object-level Read on ${objectApiName}, but the record has not been shared with them under the current sharing model.`;
   }
 
+  // 6. Extraction of Causal Groups, Roles, Sharing Settings, Profiles & Permission Sets
+  const groupsSet = new Set<string>();
+  const rolesSet = new Set<string>();
+  const profilesSet = new Set<string>();
+  const permissionSetsSet = new Set<string>();
+  const sharingSettingsList: Array<{ table: string; rowCause: string; accessLevel: string; label?: string }> = [];
+
+  for (const finding of sharingFindings) {
+    if (finding.type === 'group') {
+      const match = finding.label.match(/Public Group Share \((.*?)\)/i) || finding.label.match(/\((.*?)\)/);
+      if (match && match[1]) {
+        groupsSet.add(match[1].trim());
+      } else if (finding.label) {
+        groupsSet.add(finding.label.replace(/^Public Group Share:?\s*/i, '').trim());
+      }
+
+      if (finding.path && Array.isArray(finding.path)) {
+        for (const p of finding.path) {
+          if (typeof p === 'string') {
+            if (p.startsWith('Role:')) {
+              rolesSet.add(p.replace(/^Role:\s*/, '').trim());
+            } else if (!p.startsWith('005') && !p.startsWith('00G') && !p.startsWith('00E')) {
+              groupsSet.add(p.trim());
+            }
+          }
+        }
+      }
+
+      sharingSettingsList.push({
+        table: finding.source ? finding.source.split(' ')[0] : `${objectApiName}Share`,
+        rowCause: finding.rowCause ? `Rule (${finding.rowCause})` : 'Sharing Rule',
+        accessLevel: finding.accessLevel,
+        label: finding.label,
+      });
+    } else if (finding.type === 'hierarchy') {
+      if (finding.path && Array.isArray(finding.path)) {
+        for (const p of finding.path) {
+          if (typeof p === 'string' && p.startsWith('Role:')) {
+            rolesSet.add(p.replace(/^Role:\s*/, '').trim());
+          }
+        }
+      } else {
+        rolesSet.add('UserRole Hierarchy Manager');
+      }
+      sharingSettingsList.push({
+        table: 'UserRole Hierarchy',
+        rowCause: 'Manager Subordinate Inheritance',
+        accessLevel: finding.accessLevel,
+        label: finding.label,
+      });
+    } else if (finding.type === 'ownership') {
+      sharingSettingsList.push({
+        table: `${objectApiName}.OwnerId`,
+        rowCause: 'Record Ownership',
+        accessLevel: 'All',
+        label: finding.label,
+      });
+    } else if (finding.type === 'share_row') {
+      sharingSettingsList.push({
+        table: finding.source,
+        rowCause: finding.rowCause || 'Manual',
+        accessLevel: finding.accessLevel,
+        label: finding.label,
+      });
+    } else if (finding.type === 'owd') {
+      sharingSettingsList.push({
+        table: 'EntityDefinition',
+        rowCause: 'Org-Wide Default',
+        accessLevel: finding.accessLevel,
+        label: finding.label,
+      });
+    }
+  }
+
+  // Inspect evidence details for additional roles or grant sources
+  for (const ev of result.evidence || []) {
+    if (ev.details) {
+      if (typeof ev.details.ownerRoleName === 'string') rolesSet.add(ev.details.ownerRoleName);
+      if (typeof ev.details.targetRoleName === 'string') rolesSet.add(ev.details.targetRoleName);
+      if (Array.isArray(ev.details.path)) {
+        for (const p of ev.details.path) {
+          if (typeof p === 'string' && p.startsWith('Role:')) {
+            rolesSet.add(p.replace(/^Role:\s*/, '').trim());
+          }
+        }
+      }
+      if (ev.details.grantSources && typeof ev.details.grantSources === 'object') {
+        const gs = ev.details.grantSources as Record<string, string[]>;
+        for (const act of Object.keys(gs)) {
+          for (const src of gs[act] || []) {
+            if (typeof src === 'string') {
+              if (src.startsWith('Profile:')) {
+                profilesSet.add(src.replace(/^Profile:\s*/, '').trim());
+              } else if (src.startsWith('Permission Set:') || src.startsWith('PSG:')) {
+                permissionSetsSet.add(src.replace(/^(Permission Set|PSG):\s*/, '').trim());
+              } else if (src !== 'Standard System Field' && src !== 'Restricted / Denied') {
+                permissionSetsSet.add(src.trim());
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Inspect field permissions for granting profiles and permission sets
+  for (const f of fieldPermissions) {
+    if (f.source && f.source !== 'Standard System Field' && f.source !== 'Restricted / Denied') {
+      if (f.source.startsWith('Profile:')) {
+        profilesSet.add(f.source.replace(/^Profile:\s*/, '').trim());
+      } else if (f.source.startsWith('Permission Set:')) {
+        permissionSetsSet.add(f.source.replace(/^Permission Set:\s*/, '').trim());
+      } else {
+        permissionSetsSet.add(f.source.trim());
+      }
+    }
+  }
+
+  const attribution: CausalAccessAttribution = {
+    groups: Array.from(groupsSet),
+    roles: Array.from(rolesSet),
+    sharingSettings: sharingSettingsList,
+    profiles: Array.from(profilesSet),
+    permissionSets: Array.from(permissionSetsSet),
+  };
+
+  // 7. Assemble Visual Provenance Breadcrumb Nodes
+  const breadcrumbNodes: ProvenanceBreadcrumbNode[] = [
+    {
+      id: 'node-user',
+      type: 'user',
+      label: targetUserName,
+      subLabel: 'Target User',
+      status: 'active',
+    },
+  ];
+
+  if (attribution.roles.length > 0) {
+    breadcrumbNodes.push({
+      id: 'node-role',
+      type: 'role',
+      label: attribution.roles[0],
+      subLabel: attribution.roles.length > 1 ? `+${attribution.roles.length - 1} role(s)` : 'User Role',
+      status: 'active',
+    });
+  }
+
+  if (attribution.groups.length > 0) {
+    breadcrumbNodes.push({
+      id: 'node-group',
+      type: 'group',
+      label: attribution.groups[0],
+      subLabel: attribution.groups.length > 1 ? `+${attribution.groups.length - 1} group(s)` : 'Public Group',
+      status: 'active',
+    });
+  }
+
+  if (attribution.sharingSettings.length > 0) {
+    const primaryShare = attribution.sharingSettings[0];
+    breadcrumbNodes.push({
+      id: 'node-share',
+      type: 'share',
+      label: primaryShare.table,
+      subLabel: primaryShare.rowCause || 'Share Row',
+      status: 'active',
+    });
+  } else {
+    breadcrumbNodes.push({
+      id: 'node-share',
+      type: 'share',
+      label: 'OWD / Base Policy',
+      subLabel: 'No Direct Share Row',
+      status: 'neutral',
+    });
+  }
+
+  const verdictLabel = canRead && canEdit
+    ? 'Read & Edit Granted'
+    : canRead
+    ? 'Read-Only Granted'
+    : recordAccess?.read === false
+    ? 'Access Denied'
+    : 'Inconclusive';
+
+  breadcrumbNodes.push({
+    id: 'node-verdict',
+    type: 'verdict',
+    label: verdictLabel,
+    subLabel: recordAccess?.maxAccessLevel ? `Max: ${recordAccess.maxAccessLevel}` : undefined,
+    status: canRead ? 'active' : 'denied',
+  });
+
   return {
     headline,
     badgeType,
@@ -119,5 +334,7 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
     objectCrudFact,
     flsFact,
     blockerFact,
+    breadcrumbNodes,
+    attribution,
   };
 }

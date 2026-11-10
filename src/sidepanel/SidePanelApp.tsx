@@ -4,7 +4,6 @@ import {
 } from '../components/Header';
 import { RecordContextCard } from '../components/RecordContextCard';
 import { TargetUserSelector } from '../components/TargetUserSelector';
-import { SummaryCard } from '../components/SummaryCard';
 import { NarrativeSummaryCard } from '../components/NarrativeSummaryCard';
 import { AiExplainerTab } from '../components/AiExplainerTab';
 import { EvidenceCard } from '../components/EvidenceCard';
@@ -41,7 +40,6 @@ import {
   AlertCircle,
   FileSearch,
   Sparkles,
-  Lightbulb,
 } from 'lucide-react';
 
 export const SidePanelApp: React.FC = () => {
@@ -52,8 +50,8 @@ export const SidePanelApp: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
-  // Tabs
-  const [activeTab, setActiveTab] = useState<'narrative' | 'ai' | 'fields' | 'sharing' | 'evidence' | 'limitations'>('narrative');
+  // Tabs (Visual Summary is prominently hosted at the top, tabs explore deeper drilldowns)
+  const [activeTab, setActiveTab] = useState<'ai' | 'fields' | 'sharing' | 'evidence' | 'limitations'>('ai');
 
   // Modals
   const [isConnectOpen, setIsConnectOpen] = useState(false);
@@ -266,20 +264,8 @@ export const SidePanelApp: React.FC = () => {
               onOpenAiTab={() => setActiveTab('ai')}
             />
 
-            {/* Navigation Tabs */}
+            {/* Navigation Tabs (Deeper drill-down tabs below the visual Summary) */}
             <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 pt-1.5 space-x-1 text-xs overflow-x-auto shadow-sm">
-              <button
-                onClick={() => setActiveTab('narrative')}
-                className={`px-2.5 py-2 font-semibold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
-                  activeTab === 'narrative'
-                    ? 'border-blue-600 text-blue-700'
-                    : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <Lightbulb className="w-3.5 h-3.5 mr-1 text-amber-500" />
-                Summary
-              </button>
-
               <button
                 onClick={() => setActiveTab('ai')}
                 className={`px-2.5 py-2 font-bold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
@@ -342,12 +328,6 @@ export const SidePanelApp: React.FC = () => {
             </div>
 
             {/* Tab Panels */}
-            {activeTab === 'narrative' && (
-              <div className="space-y-3">
-                <SummaryCard result={analysisResult} />
-              </div>
-            )}
-
             {activeTab === 'ai' && (
               <AiExplainerTab result={analysisResult} />
             )}
