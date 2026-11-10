@@ -128,6 +128,11 @@ export async function runOllama(prompt: string, endpoint = 'http://localhost:114
   });
 
   if (!res.ok) {
+    if (res.status === 403) {
+      throw new Error(
+        'Ollama returned HTTP 403 (Forbidden). Ollama blocked the Chrome Extension origin. Run in Terminal: launchctl setenv OLLAMA_ORIGINS "*" && killall Ollama ollama && open -a Ollama'
+      );
+    }
     const errText = await res.text().catch(() => '');
     throw new Error(`Ollama request failed (HTTP ${res.status}): ${errText || res.statusText}`);
   }
@@ -162,6 +167,11 @@ export async function runOllamaChat(
     if (res.ok) {
       const data = await res.json();
       return data.message?.content || data.response || '';
+    }
+    if (res.status === 403) {
+      throw new Error(
+        'Ollama returned HTTP 403 (Forbidden). Ollama blocked the Chrome Extension origin. Run in Terminal: launchctl setenv OLLAMA_ORIGINS "*" && killall Ollama ollama && open -a Ollama'
+      );
     }
   } catch {
     // Fall back to /api/generate with concatenated transcript
