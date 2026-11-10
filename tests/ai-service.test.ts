@@ -98,7 +98,7 @@ describe('Phase 2 AI Architecture', () => {
     });
   });
 
-  describe('Cloud BYOK Providers (OpenAI, etc.)', () => {
+  describe('Cloud BYOK Providers (OpenAI, Gemini, etc.)', () => {
     it('fails fast if API Key is not set', async () => {
       await expect(runOpenAi('prompt', '', 'gpt-4o-mini')).rejects.toThrow('OpenAI API Key is missing');
     });
@@ -119,6 +119,27 @@ describe('Phase 2 AI Architecture', () => {
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: 'Bearer sk-fake-key-12345',
+          }),
+        })
+      );
+    });
+
+    it('calls Google Gemini endpoint with x-goog-api-key header and handles auto-fallback', async () => {
+      const fakeFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: 'Gemini analysis output.' }] } }],
+        }),
+      });
+      globalThis.fetch = fakeFetch;
+
+      const res = await (await import('../src/ai/ai-service')).runGemini('Test prompt', 'AQ.TestKey123', 'gemini-1.5-flash');
+      expect(res).toBe('Gemini analysis output.');
+      expect(fakeFetch).toHaveBeenCalledWith(
+        expect.stringContaining('gemini-flash-lite-latest'),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'x-goog-api-key': 'AQ.TestKey123',
           }),
         })
       );

@@ -201,29 +201,68 @@ export async function runAnthropic(prompt: string, apiKey: string, model = 'clau
 }
 
 /**
- * Executes prompt on Google Gemini API
+ * Executes prompt on Google Gemini API with support for modern Gemini Studio keys and auto-fallback
  */
-export async function runGemini(prompt: string, apiKey: string, model = 'gemini-1.5-flash'): Promise<string> {
+export async function runGemini(prompt: string, apiKey: string, model = 'gemini-flash-lite-latest'): Promise<string> {
   if (!apiKey) throw new Error('Gemini API Key is missing. Please set it in Settings.');
 
-  const cleanModel = model || 'gemini-1.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
+  const keyTrimmed = apiKey.trim();
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-    }),
-  });
-
-  if (!res.ok) {
-    const errJson = await res.json().catch(() => ({}));
-    throw new Error(`Google Gemini API error (${res.status}): ${errJson.error?.message || res.statusText}`);
+  // Normalize legacy/retired model names (e.g. gemini-1.5-flash is retired on v1beta)
+  let requestedModel = model?.trim() || 'gemini-flash-lite-latest';
+  if (requestedModel === 'gemini-1.5-flash' || requestedModel === 'models/gemini-1.5-flash') {
+    requestedModel = 'gemini-flash-lite-latest';
   }
 
-  const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No content returned from Gemini.';
+  // Sequence of candidate models to try in case of 404 (retired model) or 503 (high demand spike)
+  const candidateModels = Array.from(new Set([
+    requestedModel.replace(/^models\//, ''),
+    'gemini-flash-lite-latest',
+    'gemini-flash-latest',
+  ]));
+
+  let lastError = '';
+
+  for (const candidate of candidateModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent?key=${encodeURIComponent(keyTrimmed)}`;
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': keyTrimmed,
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        const msg = errJson.error?.message || res.statusText;
+        lastError = `Google Gemini API error (${res.status}): ${msg}`;
+
+        // If 404 (model not found) or 503 (temporary high demand spike), try next candidate model
+        if (res.status === 404 || res.status === 503) {
+          continue;
+        }
+        throw new Error(lastError);
+      }
+
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) return text;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('404') && !msg.includes('503')) {
+        throw err;
+      }
+      lastError = msg;
+    }
+  }
+
+  throw new Error(lastError || 'All Gemini model candidates failed to respond.');
 }
 
 /**
@@ -255,7 +294,7 @@ export async function executeAiAnalysis(
       }
       case 'gemini': {
         const text = await runGemini(promptText, config.geminiApiKey || '', config.geminiModel);
-        return { text, provider: 'gemini', modelUsed: config.geminiModel || 'gemini-1.5-flash' };
+        return { text, provider: 'gemini', modelUsed: config.geminiModel || 'gemini-flash-lite-latest' };
       }
       case 'web-launchers':
       default:

@@ -493,7 +493,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 {/* Google Gemini */}
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-[10px] font-bold text-slate-700">Google Gemini API Key</label>
                     <button
@@ -506,11 +506,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <input
                     type={showKeys['gemini'] ? 'text' : 'password'}
-                    placeholder="AIzaSy..."
+                    placeholder="AQ... or AIzaSy... (Gemini Studio API Key)"
                     value={geminiKey}
                     onChange={(e) => setGeminiKey(e.target.value)}
                     className="w-full px-2.5 py-1 border border-slate-300 rounded font-mono text-[11px]"
                   />
+                  <div>
+                    <label className="block text-[9px] font-bold text-slate-500 mb-0.5">
+                      Gemini Model
+                    </label>
+                    <div className="flex space-x-1">
+                      <select
+                        value={geminiModel}
+                        onChange={(e) => setGeminiModel(e.target.value)}
+                        className="flex-1 px-2 py-1 border border-slate-300 rounded text-[11px] bg-white font-mono"
+                      >
+                        <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recommended - Fast & Reliable)</option>
+                        <option value="gemini-flash-latest">gemini-flash-latest (Standard)</option>
+                        <option value="gemini-2.5-pro">gemini-2.5-pro (High Reasoning)</option>
+                        <option value="gemini-pro-latest">gemini-pro-latest</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
