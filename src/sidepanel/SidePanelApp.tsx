@@ -25,6 +25,7 @@ import {
   TargetUser,
   AnalysisResult,
   OrgType,
+  SharingFinding,
 } from '../types';
 import { getOrgConnection, disconnectSession } from '../auth/token-store';
 import { initiateOAuthFlow } from '../auth/oauth';
@@ -203,45 +204,92 @@ export const SidePanelApp: React.FC = () => {
     setIsLoadingB(true);
     try {
       if (isMockMode) {
+        const isContractor =
+          targetB.id.includes('Contractor') ||
+          targetB.profileName?.toLowerCase().includes('vendor') ||
+          targetB.profileName?.toLowerCase().includes('limited');
+
+        let recAccess = {
+          read: true,
+          edit: true,
+          delete: true,
+          maxAccessLevel: 'All',
+        };
+        let objPerm = {
+          read: true as boolean | 'unknown',
+          create: true as boolean | 'unknown',
+          edit: true as boolean | 'unknown',
+          delete: true as boolean | 'unknown',
+          viewAll: true as boolean | 'unknown',
+          modifyAll: true as boolean | 'unknown',
+        };
+        let sharingFinds: SharingFinding[] = [
+          {
+            type: 'ownership',
+            label: `Direct Record Owner (${targetB.name})`,
+            accessLevel: 'All',
+            rowCause: 'Owner',
+            source: `${recordContext.objectApiName}.OwnerId`,
+            status: 'confirmed',
+          },
+        ];
+
+        if (isContractor) {
+          recAccess = {
+            read: true,
+            edit: false,
+            delete: false,
+            maxAccessLevel: 'Read',
+          };
+          objPerm = {
+            read: true,
+            create: false,
+            edit: false,
+            delete: false,
+            viewAll: false,
+            modifyAll: false,
+          };
+          sharingFinds = [
+            {
+              type: 'group',
+              label: 'Vendor Public Group Share (Contractors Tier 1)',
+              accessLevel: 'Read',
+              rowCause: 'Rule',
+              source: `${recordContext.objectApiName}Share -> GroupMember`,
+              status: 'supported',
+            },
+          ];
+        }
+
         const mockDiff: AnalysisResult = {
           ...MOCK_ANALYSIS_RESULT,
           targetUserId: targetB.id,
           targetUserName: targetB.name,
-          recordAccess: {
-            read: true,
-            edit: true,
-            delete: true,
-            maxAccessLevel: 'All',
-          },
-          objectPermissions: {
-            read: true,
-            create: true,
-            edit: true,
-            delete: true,
-            viewAll: true,
-            modifyAll: true,
-          },
-          sharingFindings: [
-            {
-              type: 'ownership',
-              label: `Direct Record Owner (${targetB.name})`,
-              accessLevel: 'All',
-              rowCause: 'Owner',
-              source: 'Case.OwnerId',
-              status: 'confirmed',
-            },
-          ],
-          fieldPermissions: MOCK_ANALYSIS_RESULT.fieldPermissions.map((f) => ({
-            ...f,
-            readable: true,
-            editable: true,
-            source: `Profile: ${targetB.profileName}`,
-          })),
+          recordAccess: recAccess,
+          objectPermissions: objPerm,
+          sharingFindings: sharingFinds,
+          fieldPermissions: MOCK_ANALYSIS_RESULT.fieldPermissions.map((f) => {
+            if (isContractor) {
+              const isBasic = f.fieldApiName === 'CaseNumber' || f.fieldApiName === 'Subject';
+              return {
+                ...f,
+                readable: isBasic,
+                editable: false,
+                source: isBasic ? `Profile: ${targetB.profileName}` : 'Restricted / Denied',
+              };
+            }
+            return {
+              ...f,
+              readable: true,
+              editable: true,
+              source: `Profile: ${targetB.profileName}`,
+            };
+          }),
         };
         setResultB(mockDiff);
-      } else if (connection) {
+      } else {
         const resB = await runFullAnalysis({
-          orgId: connection.orgId,
+          orgId: connection?.orgId || 'current_session',
           recordId: recordContext.recordId,
           objectApiName: recordContext.objectApiName,
           targetUser: targetB,
@@ -420,6 +468,7 @@ export const SidePanelApp: React.FC = () => {
                 candidateUsers={isMockMode ? MOCK_TARGET_USERS : candidateUsers}
                 onSelectUserB={handleSelectUserB}
                 isLoadingB={isLoadingB}
+                isMockMode={isMockMode}
               />
             )}
 
