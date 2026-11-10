@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, Settings, LogOut, Link2, ExternalLink, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Shield, Settings, LogOut, Link2, ExternalLink, FileText, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 import { OrgConnection } from '../types';
 
 interface HeaderProps {
@@ -8,6 +8,7 @@ interface HeaderProps {
   onDisconnect: () => void;
   onOpenSettings: () => void;
   onOpenExport?: () => void;
+  onOpenAi?: () => void;
   isPopup?: boolean;
 }
 
@@ -17,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   onDisconnect,
   onOpenSettings,
   onOpenExport,
+  onOpenAi,
   isPopup = false,
 }) => {
   const handleOpenSidePanel = () => {
@@ -79,6 +81,16 @@ export const Header: React.FC<HeaderProps> = ({
             className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-md transition-colors"
           >
             <FileText className="w-4 h-4" />
+          </button>
+        )}
+
+        {onOpenAi && (
+          <button
+            onClick={onOpenAi}
+            title="Open AI Explainer (ChatGPT / Claude / Copilot)"
+            className="p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-md transition-colors"
+          >
+            <Sparkles className="w-4 h-4 text-amber-500 fill-current" />
           </button>
         )}
 

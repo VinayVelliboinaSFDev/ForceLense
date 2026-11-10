@@ -5,6 +5,8 @@ import {
 import { RecordContextCard } from '../components/RecordContextCard';
 import { TargetUserSelector } from '../components/TargetUserSelector';
 import { SummaryCard } from '../components/SummaryCard';
+import { NarrativeSummaryCard } from '../components/NarrativeSummaryCard';
+import { AiExplainerTab } from '../components/AiExplainerTab';
 import { EvidenceCard } from '../components/EvidenceCard';
 import { FieldPermissionsTable } from '../components/FieldPermissionsTable';
 import { SharingEvidenceList } from '../components/SharingEvidenceList';
@@ -38,6 +40,8 @@ import {
   Share2,
   AlertCircle,
   FileSearch,
+  Sparkles,
+  Lightbulb,
 } from 'lucide-react';
 
 export const SidePanelApp: React.FC = () => {
@@ -49,7 +53,7 @@ export const SidePanelApp: React.FC = () => {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // Tabs
-  const [activeTab, setActiveTab] = useState<'overview' | 'object' | 'fields' | 'sharing' | 'limitations'>('overview');
+  const [activeTab, setActiveTab] = useState<'narrative' | 'ai' | 'fields' | 'sharing' | 'evidence' | 'limitations'>('narrative');
 
   // Modals
   const [isConnectOpen, setIsConnectOpen] = useState(false);
@@ -195,6 +199,7 @@ export const SidePanelApp: React.FC = () => {
         onDisconnect={handleDisconnect}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenExport={analysisResult ? () => setIsExportOpen(true) : undefined}
+        onOpenAi={analysisResult ? () => setActiveTab('ai') : undefined}
       />
 
       {/* Main Body */}
@@ -255,26 +260,41 @@ export const SidePanelApp: React.FC = () => {
         {/* Analysis Results View */}
         {analysisResult && (
           <div className="space-y-3 pb-6">
-            {/* High-level Summary Card */}
-            <SummaryCard result={analysisResult} />
+            {/* Executive Narrative Card (Always visible at top of results) */}
+            <NarrativeSummaryCard
+              result={analysisResult}
+              onOpenAiTab={() => setActiveTab('ai')}
+            />
 
             {/* Navigation Tabs */}
-            <div className="flex border-b border-slate-200 bg-white rounded-t-lg px-2 pt-1.5 space-x-1 text-xs">
+            <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-2 pt-1.5 space-x-1 text-xs overflow-x-auto shadow-sm">
               <button
-                onClick={() => setActiveTab('overview')}
-                className={`px-3 py-2 font-semibold border-b-2 transition-all flex items-center ${
-                  activeTab === 'overview'
+                onClick={() => setActiveTab('narrative')}
+                className={`px-2.5 py-2 font-semibold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
+                  activeTab === 'narrative'
                     ? 'border-blue-600 text-blue-700'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <Layers className="w-3.5 h-3.5 mr-1" />
-                Evidence
+                <Lightbulb className="w-3.5 h-3.5 mr-1 text-amber-500" />
+                Summary
+              </button>
+
+              <button
+                onClick={() => setActiveTab('ai')}
+                className={`px-2.5 py-2 font-bold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
+                  activeTab === 'ai'
+                    ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50 rounded-t-md'
+                    : 'border-transparent text-indigo-600 hover:text-indigo-800'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 mr-1 text-amber-500 fill-current animate-pulse" />
+                AI Explainer
               </button>
 
               <button
                 onClick={() => setActiveTab('fields')}
-                className={`px-3 py-2 font-semibold border-b-2 transition-all flex items-center ${
+                className={`px-2.5 py-2 font-semibold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
                   activeTab === 'fields'
                     ? 'border-blue-600 text-blue-700'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -286,7 +306,7 @@ export const SidePanelApp: React.FC = () => {
 
               <button
                 onClick={() => setActiveTab('sharing')}
-                className={`px-3 py-2 font-semibold border-b-2 transition-all flex items-center ${
+                className={`px-2.5 py-2 font-semibold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
                   activeTab === 'sharing'
                     ? 'border-blue-600 text-blue-700'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -297,25 +317,39 @@ export const SidePanelApp: React.FC = () => {
               </button>
 
               <button
+                onClick={() => setActiveTab('evidence')}
+                className={`px-2.5 py-2 font-semibold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
+                  activeTab === 'evidence'
+                    ? 'border-blue-600 text-blue-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5 mr-1" />
+                Evidence ({analysisResult.evidence.length})
+              </button>
+
+              <button
                 onClick={() => setActiveTab('limitations')}
-                className={`px-3 py-2 font-semibold border-b-2 transition-all flex items-center ${
+                className={`px-2.5 py-2 font-semibold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
                   activeTab === 'limitations'
                     ? 'border-blue-600 text-blue-700'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
                 <AlertCircle className="w-3.5 h-3.5 mr-1" />
-                Coverage ({analysisResult.limitations.length})
+                Limits ({analysisResult.limitations.length})
               </button>
             </div>
 
             {/* Tab Panels */}
-            {activeTab === 'overview' && (
-              <div className="space-y-2.5">
-                {analysisResult.evidence.map((ev) => (
-                  <EvidenceCard key={ev.id} evidence={ev} />
-                ))}
+            {activeTab === 'narrative' && (
+              <div className="space-y-3">
+                <SummaryCard result={analysisResult} />
               </div>
+            )}
+
+            {activeTab === 'ai' && (
+              <AiExplainerTab result={analysisResult} />
             )}
 
             {activeTab === 'fields' && (
@@ -329,8 +363,16 @@ export const SidePanelApp: React.FC = () => {
               />
             )}
 
+            {activeTab === 'evidence' && (
+              <div className="space-y-2.5">
+                {analysisResult.evidence.map((ev) => (
+                  <EvidenceCard key={ev.id} evidence={ev} />
+                ))}
+              </div>
+            )}
+
             {activeTab === 'limitations' && (
-              <div className="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
+              <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
                 <div className="flex items-center space-x-2 text-slate-900 font-bold text-xs">
                   <AlertCircle className="w-4 h-4 text-amber-600" />
                   <span>Coverage & Platform Boundaries</span>
@@ -341,7 +383,7 @@ export const SidePanelApp: React.FC = () => {
                 </p>
                 <ul className="space-y-2 text-xs">
                   {analysisResult.limitations.map((lim, idx) => (
-                    <li key={idx} className="p-2.5 bg-amber-50 border border-amber-200/80 rounded text-amber-900">
+                    <li key={idx} className="p-2.5 bg-amber-50 border border-amber-200/80 rounded-lg text-amber-900 leading-relaxed">
                       <strong>Limitation {idx + 1}:</strong> {lim}
                     </li>
                   ))}

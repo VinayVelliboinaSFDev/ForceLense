@@ -102,15 +102,18 @@ export const PopupApp: React.FC = () => {
           />
 
           {/* Side Panel Prompt */}
-          <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white rounded-lg p-4 shadow-sm space-y-2.5">
+          <div className="bg-gradient-to-br from-indigo-900 via-blue-900 to-slate-900 text-white rounded-xl p-4 shadow-sm space-y-2.5">
             <div className="flex items-start justify-between">
               <div>
-                <h3 className="text-sm font-bold tracking-tight">Full Side Panel Analysis</h3>
+                <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-400 text-slate-950 uppercase tracking-wider mb-1">
+                  AI Explainer Ready
+                </span>
+                <h3 className="text-sm font-bold tracking-tight">Full Side Panel & AI Analysis</h3>
                 <p className="text-xs text-blue-100 mt-0.5 leading-snug">
-                  Analyze effective permissions, object CRUD, FLS, and sharing rows side-by-side with Salesforce Lightning.
+                  Explain record access, object CRUD, FLS, and 1-click launch analysis with ChatGPT, Claude, and Copilot.
                 </p>
               </div>
-              <Sparkles className="w-5 h-5 text-amber-300 shrink-0 ml-2" />
+              <Sparkles className="w-5 h-5 text-amber-300 shrink-0 ml-2 animate-pulse" />
             </div>
 
             <button
