@@ -457,25 +457,29 @@ export const SidePanelApp: React.FC = () => {
             </div>
 
             {/* Tab Panels */}
-            {activeTab === 'ai' && (
+            <div className={activeTab === 'ai' ? 'block' : 'hidden'}>
               <AiExplainerTab
                 result={analysisResult}
                 onOpenSettings={() => setIsSettingsOpen(true)}
-              />
-            )}
-
-            {activeTab === 'diff' && selectedUser && (
-              <UserDiffView
-                userA={selectedUser}
-                resultA={analysisResult}
-                userB={userB}
-                resultB={resultB}
-                candidateUsers={isMockMode ? MOCK_TARGET_USERS : candidateUsers}
-                onSelectUserB={handleSelectUserB}
-                isLoadingB={isLoadingB}
                 isMockMode={isMockMode}
               />
-            )}
+            </div>
+
+            <div className={activeTab === 'diff' ? 'block' : 'hidden'}>
+              {selectedUser && (
+                <UserDiffView
+                  userA={selectedUser}
+                  resultA={analysisResult}
+                  userB={userB}
+                  resultB={resultB}
+                  candidateUsers={isMockMode ? MOCK_TARGET_USERS : candidateUsers}
+                  onSelectUserB={handleSelectUserB}
+                  isLoadingB={isLoadingB}
+                  isMockMode={isMockMode}
+                  onOpenSettings={() => setIsSettingsOpen(true)}
+                />
+              )}
+            </div>
 
             {activeTab === 'fields' && (
               <FieldPermissionsTable fields={analysisResult.fieldPermissions} />

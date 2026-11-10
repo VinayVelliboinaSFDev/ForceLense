@@ -1,50 +1,133 @@
-# ForceLens — Salesforce Record Access Explainer
+# ForceLens — Salesforce Record Access Explainer & AI Security Copilot
 
-> **Open & Free Edition** | Chrome Extension (Manifest V3) | React + TypeScript + Vite
+> **Open & Free Edition** | Chrome Extension (Manifest V3) | React 19 + TypeScript + Vite + Tailwind CSS
 
-**ForceLens** is an evidence-backed browser companion designed for Salesforce administrators, developers, consultants, and support teams. Embedded right alongside Salesforce Lightning in the Chrome Side Panel or popup, ForceLens explains why a selected Salesforce user can or cannot view, edit, or delete a particular record, object, or field.
-
----
-
-## 🌟 Key Features
-
-1. **Context-Aware Record Detection**
-   - Automatically detects current Lightning record URLs (`/lightning/r/{ObjectApiName}/{RecordId}/view`, edit, and related views).
-   - Supports manual record ID and object override for flexibility.
-
-2. **Target User Selection**
-   - Search active Salesforce users by Name, Username, Email, or User ID.
-   - Inspects access from the perspective of the target user without impersonating their session.
-
-3. **Multi-Dimensional Access Analysis**
-   - **Record-Level Access**: Queries `UserRecordAccess` for `HasReadAccess`, `HasEditAccess`, `HasDeleteAccess`, `HasTransferAccess`, `HasAllAccess`, and `MaxAccessLevel`.
-   - **Object-Level CRUD**: Evaluates Profile and assigned Permission Sets to compute effective Read, Create, Edit, Delete, View All, and Modify All permissions.
-   - **Field-Level Security (FLS)**: Evaluates permissionable and standard fields, clearly distinguishing readable vs editable fields.
-   - **Sharing Evidence & Grant Paths**: Inspects Record Ownership (`OwnerId`), explicit share table rows (e.g. `AccountShare`, `CaseShare`, or custom object `__Share`), and recursively resolves Public Group and Role hierarchy memberships.
-
-4. **Evidence Taxonomy & Known Limitations**
-   - Categorizes every finding into **Confirmed**, **Supported**, **Possible**, **Unavailable**, or **Unknown**.
-   - Explicitly documents platform boundaries (e.g. Organization-Wide Defaults requiring Metadata/Tooling API, runtime Restriction Rules, and Dynamic Forms component filters) rather than making false inferences.
-
-5. **Diagnostic Summary Export**
-   - Generate copyable Markdown or JSON diagnostic reports with a single click.
-   - Strict security: Access tokens, refresh tokens, and credentials are never included in exported logs or reports.
-
-6. **Interactive Demo / Sample Mode**
-   - Built-in offline demo mode loaded with a realistic Case record, user permissions, and sharing rules so you can explore ForceLens immediately even before connecting to a live Salesforce org.
+**ForceLens** is an evidence-backed browser companion designed for Salesforce administrators, architects, developers, consultants, and security teams. Embedded directly alongside Salesforce Lightning in the Chrome Side Panel or popup, ForceLens explains **why a selected user can or cannot view, edit, or delete a particular record, object, or field** — with zero manual guesswork.
 
 ---
 
-## 🔒 Security & Privacy Architecture
+## 🌟 Key Capabilities
 
-- **OAuth 2.0 with PKCE (Proof Key for Code Exchange)**: Cryptographically secure authorization flow via `chrome.identity.launchWebAuthFlow`. No client secret is ever required, stored, or shipped.
-- **Read-Only Operation**: ForceLens never modifies org metadata, user permissions, records, or sharing configurations.
-- **Token Isolation**: OAuth tokens remain strictly inside extension-controlled storage (`chrome.storage.local` / `session`). Tokens are **never** injected into the Salesforce DOM, content scripts, or telemetry.
-- **Least-Privilege Scopes**: Requests only standard read/query scopes (`api`, `id`, `web`, `refresh_token`).
+### 1. Instant Session Auto-Detection (Inspector-Style)
+- Automatically detects and hooks into your active Salesforce session using `chrome.cookies` — **zero Connected App configuration needed**!
+- Seamlessly falls back to OAuth 2.0 PKCE if you prefer custom External Client App keys.
+
+### 2. Multi-Dimensional Access Analysis
+- **Record-Level Access**: Queries `UserRecordAccess` for `HasReadAccess`, `HasEditAccess`, `HasDeleteAccess`, `HasTransferAccess`, and `MaxAccessLevel`.
+- **Object-Level CRUD**: Evaluates Profile and assigned Permission Sets for effective Read, Create, Edit, Delete, View All, and Modify All permissions.
+- **Sharing Evidence & Grant Paths**: Inspects Record Ownership (`OwnerId`), explicit share table rows (e.g. `AccountShare`, `CaseShare`, custom `__Share`), and recursively resolves Public Group and Role hierarchy memberships.
+- **ControlledByParent & Master-Detail Traversal**: Automatically follows parent sharing for child records (e.g. `OpportunityLineItem` ➔ `Opportunity`, `CaseComment` ➔ `Case`).
+
+### 3. User Access Diff Mode (Side-by-Side Comparison)
+- *"Why can User A see this record, but User B cannot?"*
+- Select User A and search any User B live in your org.
+- Side-by-side comparative matrices for Record Access (`UserRecordAccess`), Object CRUD, and Sharing Provenance.
+- **AI Access Discrepancy & Root Cause Summary**: Instant AI explanation of the exact structural divergence between the two users.
+
+### 4. AI Security Copilot & Interactive Multi-Turn Chat
+- Powered by a **Dual-Tier AI Architecture**:
+  - **Tier 1 (Zero-Setup / Free)**: Chrome Built-in AI (Gemini Nano on-device) & 1-Click Launchers (ChatGPT, Claude, Copilot, Gemini).
+  - **Tier 2 (Enterprise & Custom)**: Google Gemini API, OpenAI (BYOK), Anthropic Claude (BYOK), and Local Ollama (100% private, on-premise LLMs).
+- **Rich Visual Output**:
+  - 🎯 **Card 1: Executive Access Scorecard**: Clean visual table with status badges (`🟢 GRANTED`, `🔴 DENIED`).
+  - ⛓️ **Card 2: Visual Provenance Chain**: Step-by-step breadcrumb flow tiles connecting User ➔ Group/Role ➔ Share Table ➔ Record Access.
+  - ⚠️ **Card 3: Discrepancy & Blocker Callout**: Explains the exact intersection model blocker (e.g. Object CRUD is Edit, but Record Sharing is Read-only).
+  - 🛠️ **Card 4: Administrator Remediation Tile**: Concrete, 2-step Salesforce Setup click-paths to resolve access issues.
+- **Interactive Chat Conversation**: Chat with ForceLens Copilot, ask follow-up questions, and explore remediation options.
+- **Tab Persistence**: Chat history and analysis states persist uninterrupted when switching between tabs in the extension.
+- **Live Read-Only Salesforce Org Querying**: The AI Copilot can execute safe, read-only SOQL queries (`SELECT ...`) against your live Salesforce org to retrieve live context and verify security settings in real time!
 
 ---
 
-## 🚀 Quick Start / Developer Installation
+## 🧠 AI Functionality Architecture & Workflow Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           FORCELENS AI ARCHITECTURE                             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+ 1. Verified Evidence Extraction (Zero Hallucination Grounding)
+    ┌───────────────────────────┐     ┌───────────────────────────┐
+    │  UserRecordAccess Flags   │     │   Profile & PermSet CRUD  │
+    └─────────────┬─────────────┘     └─────────────┬─────────────┘
+                  │                                 │
+                  ▼                                 ▼
+    ┌───────────────────────────┐     ┌───────────────────────────┐
+    │  Share Table Rows & Owner │     │  Role & Group Memberships │
+    └─────────────┬─────────────┘     └─────────────┬─────────────┘
+                  │                                 │
+                  └────────────────┬────────────────┘
+                                   ▼
+                ┌───────────────────────────────────────┐
+                │   ai-prompt-generator.ts              │
+                │   • Strips FLS for clean Record/CRUD  │
+                │   • Formats 4 Structured Output Cards │
+                │   • Formats Diff Prompts for User A/B │
+                └──────────────────┬────────────────────┘
+                                   │
+ 2. Provider Routing & Multi-Turn Dispatcher (ai-service.ts)
+                                   ▼
+          ┌───────────────────────────────────────────────────┐
+          │                  executeAiChat()                  │
+          │             (ai/ai-service.ts dispatcher)         │
+          └───────┬──────────────┬─────────────┬──────────────┘
+                  │              │             │
+        ┌─────────┴────────┐     │     ┌───────┴──────────┐
+        ▼                  ▼     ▼     ▼                  ▼
+   Chrome Nano       Gemini API      Ollama (Local)     OpenAI / Claude
+   (On-Device)       (Cloud BYOK)    (100% On-Premise)  (Cloud BYOK)
+
+ 3. Agentic Live Read-Only Salesforce Query Loop (AiExplainerTab.tsx)
+                  │
+                  ▼
+          ┌───────────────────────────────────────────────────┐
+          │ Model detects need for live org info              │
+          │ Emits: [SALESFORCE_QUERY: SELECT ... FROM ...]    │
+          └──────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+          ┌───────────────────────────────────────────────────┐
+          │ soql-safety.ts Validator                          │
+          │ • Enforces read-only SELECT (blocks DML/mutations)│
+          │ • Enforces memory limits (max 50-100 rows)        │
+          └──────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+          ┌───────────────────────────────────────────────────┐
+          │ sfApi.query() executes via active session         │
+          │ Returns real Salesforce org records               │
+          └──────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+          ┌───────────────────────────────────────────────────┐
+          │ Synthesizes final response with live org context  │
+          │ Displays visual badge: 🔍 Queried Salesforce Org  │
+          └──────────────────┬────────────────────────────────┘
+                             │
+ 4. Rich Rendering & Interactive Conversation (RichAiResponseView.tsx)
+                             ▼
+ ┌───────────────────────────────────────────────────────────────────────┐
+ │ • Card 1: Executive Scorecard Table (🟢 GRANTED / 🔴 DENIED)          │
+ │ • Card 2: Visual Provenance Flow (User ⬇️ Role/Group ⬇️ Share Row)   │
+ │ • Card 3: Discrepancy & Blocker Callout Alert Box                     │
+ │ • Card 4: Actionable Setup Click-Path Remediation Tile                │
+ │ • Interactive Chat Input + Quick Suggestion Chips                     │
+ │ • Tab-Persistent Conversation State (resets on user/record change)    │
+ └───────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔒 Security & Privacy Commitments
+
+- **100% Free & Open-Source**: No paywalls, no subscriptions, no tracking.
+- **Read-Only Operation**: ForceLens never performs `INSERT`, `UPDATE`, `DELETE`, `DROP`, or `ALTER` operations. All queries are strictly validated.
+- **Zero Token Leakage**: Tokens and secrets are isolated in memory and never shared with AI prompts, content scripts, or logs.
+- **Local AI Privacy**: Supports local Ollama models (`llama3`, `mistral`, `codellama`) for air-gapped or HIPAA/SOC2 compliance requirements.
+
+---
+
+## 🚀 Developer Quick Start
 
 ### 1. Build the Extension
 ```bash
@@ -55,7 +138,7 @@ cd ForceLense
 # Install dependencies
 npm install
 
-# Run automated tests
+# Run unit tests
 npm test
 
 # Build production bundle
@@ -63,87 +146,54 @@ npm run build
 ```
 
 ### 2. Load Unpacked in Google Chrome
-1. Open Google Chrome and navigate to `chrome://extensions/`.
-2. Enable the **Developer mode** toggle in the top-right corner.
-3. Click the **Load unpacked** button.
-4. Select the `dist/` directory inside this project folder (`/Users/vinayvelliboina/Documents/ForceLense/dist`).
-5. Pin the **ForceLens** icon to your Chrome toolbar.
+1. Open Google Chrome and go to `chrome://extensions/`.
+2. Enable **Developer mode** (top-right toggle).
+3. Click **Load unpacked**.
+4. Select the `dist/` directory inside this repository.
+5. Open any Salesforce record and launch ForceLens from the Side Panel icon!
 
 ---
 
-## ⚙️ Salesforce External Client App Setup
-
-To connect to your live Salesforce org:
-
-1. In Salesforce Setup, go to **App Manager** (or **External Client App Manager**).
-2. Create a new **Connected App** or **External Client App**:
-   - **App Name**: `ForceLens Chrome Extension`
-   - **Contact Email**: your email
-   - **Enable OAuth Settings**: Checked
-   - **Callback URL (Redirect URI)**:
-     ```
-     https://<your-extension-id>.chromiumapp.org/oauth
-     ```
-     *(You can find and copy your exact Redirect URI directly in ForceLens under **Settings** ⚙️)*
-   - **Selected OAuth Scopes**:
-     - Access the Salesforce API (`api`)
-     - Perform requests at any time (`refresh_token, offline_access`)
-     - Access unique user identifiers (`id`)
-     - Access your basic information (`web`)
-   - **Require Proof Key for Code Exchange (PKCE)**: Checked / Supported
-3. Copy the **Consumer Key (Client ID)**.
-4. In ForceLens, click **Connect** or **Settings** (⚙️), paste your **Consumer Key**, and select **Production/Developer Edition** or **Sandbox**.
-
----
-
-## 📁 Project Structure
+## 📁 Repository Structure
 
 ```
 ForceLense/
-├── dist/                  # Production-ready Chrome MV3 unpacked extension
+├── dist/                      # Compiled Chrome MV3 extension bundle
 ├── public/
-│   ├── manifest.json      # Manifest V3 configuration
-│   └── icons/             # 16x16, 32x32, 48x48, 128x128 icons
+│   ├── manifest.json          # Chrome Manifest V3 configuration
+│   └── icons/                 # Extension logos (16, 32, 48, 128)
 ├── src/
-│   ├── analyzers/         # Access analysis orchestration & evidence engines
-│   │   ├── record-access.ts
-│   │   ├── object-permissions.ts
-│   │   ├── field-permissions.ts
-│   │   ├── sharing-evidence.ts
-│   │   └── orchestrator.ts
-│   ├── auth/              # OAuth 2.0 PKCE & secure token store
-│   │   ├── pkce.ts
-│   │   ├── oauth.ts
-│   │   └── token-store.ts
-│   ├── background/        # MV3 Background service worker
-│   │   └── service-worker.ts
-│   ├── components/        # Reusable React components & modals
-│   ├── content/           # Content script & Lightning record detector
-│   │   ├── content.ts
-│   │   └── record-detector.ts
-│   ├── popup/             # Extension toolbar popup
-│   ├── salesforce/        # Salesforce REST API client & SOQL queries
-│   ├── sidepanel/         # Side Panel primary workflow application
-│   ├── styles/            # Tailwind CSS and global styling
-│   └── types/             # Normalized schemas & data models
-├── tests/                 # Vitest automated test suite
+│   ├── ai/                    # AI Copilot engine, providers & stores
+│   │   ├── ai-service.ts      # Multi-turn chat dispatcher (Gemini, Claude, GPT, Ollama, Chrome)
+│   │   ├── ai-store.ts        # Persistent provider & API key settings
+│   │   └── ai-types.ts        # ChatMessage, AiSettingsConfig, Provider types
+│   ├── analyzers/             # Provenance & evidence analysis
+│   │   ├── ai-prompt-generator.ts # Prompt engineering for single & diff analysis
+│   │   ├── record-access.ts   # UserRecordAccess query & resolver
+│   │   ├── object-permissions.ts # Profile & PermissionSet CRUD calculator
+│   │   ├── sharing-evidence.ts# Share tables & role hierarchy traversal
+│   │   └── orchestrator.ts    # Unified analysis orchestrator
+│   ├── auth/                  # Session auto-detection & OAuth PKCE
+│   │   ├── salesforce-session.ts # Cookie-based active session extractor
+│   │   ├── oauth.ts           # Fallback PKCE OAuth 2.0 flow
+│   │   └── token-store.ts     # Secure local token management
+│   ├── components/            # React UI components
+│   │   ├── AiExplainerTab.tsx # AI Copilot interactive chat & verdict tab
+│   │   ├── UserDiffView.tsx   # User Diff Mode with AI Diff Summary
+│   │   ├── RichAiResponseView.tsx # Card 1-4 markdown & visual scorecard renderer
+│   │   └── Header.tsx, etc.
+│   ├── salesforce/            # Salesforce REST API & safety
+│   │   ├── api-client.ts      # Authenticated REST API & SOQL query client
+│   │   └── soql-safety.ts     # Read-only SOQL validator & sanitizer
+│   └── sidepanel/             # Side Panel main entrypoint
+│       └── SidePanelApp.tsx   # Persistent tab container & root state
+├── tests/                     # Vitest automated test suite (53 unit tests)
 ├── package.json
-├── tsconfig.json
-├── vite.config.ts
-└── vite.content.config.ts
+└── vite.config.ts
 ```
 
 ---
 
-## 🧪 Testing
+## 📄 License
 
-```bash
-# Run unit and integration test suite
-npm test
-```
-
----
-
-## 📄 License & Open-Source
-
-ForceLens is open and free to use under the MIT License.
+ForceLens is open-source software licensed under the [MIT License](LICENSE).

@@ -40,4 +40,6 @@ export interface ChatMessage {
   timestamp: string;
   modelUsed?: string;
   isInitialVerdict?: boolean;
+  queryExecuted?: string;
+  recordCount?: number;
 }

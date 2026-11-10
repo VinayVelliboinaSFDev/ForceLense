@@ -4,21 +4,31 @@ import {
   CheckCircle2,
   XCircle,
   HelpCircle,
-  ArrowRight,
-  Filter,
   Search,
   Key,
   Shield,
-  Lock,
   Loader2,
   GitCompare,
   X,
   UserCheck,
   Info,
+  Sparkles,
+  Zap,
+  Copy,
+  Check,
+  ExternalLink,
+  Bot,
+  RotateCcw,
+  AlertCircle,
 } from 'lucide-react';
 import { AnalysisResult, TargetUser } from '../types';
 import { sfApi } from '../salesforce/api-client';
 import { MOCK_TARGET_USERS } from './MockData';
+import { generateDiffAiPrompt, openExternalAiApp } from '../analyzers/ai-prompt-generator';
+import { getAiSettings, DEFAULT_AI_CONFIG } from '../ai/ai-store';
+import { executeAiChat } from '../ai/ai-service';
+import { AiSettingsConfig, AiGenerationResult } from '../ai/ai-types';
+import { RichAiResponseView } from './RichAiResponseView';
 
 interface UserDiffViewProps {
   userA: TargetUser;
@@ -29,6 +39,7 @@ interface UserDiffViewProps {
   onSelectUserB: (user: TargetUser) => void;
   isLoadingB: boolean;
   isMockMode?: boolean;
+  onOpenSettings?: () => void;
 }
 
 export const UserDiffView: React.FC<UserDiffViewProps> = ({
@@ -40,6 +51,7 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
   onSelectUserB,
   isLoadingB,
   isMockMode = false,
+  onOpenSettings,
 }) => {
   // Search state for User B
   const [searchTerm, setSearchTerm] = useState('');
@@ -50,9 +62,21 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // FLS Diff view states
-  const [filterMode, setFilterMode] = useState<'diff' | 'all' | 'userA' | 'userB'>('diff');
-  const [flsSearch, setFlsSearch] = useState('');
+  // AI Diff state
+  const [aiConfig, setAiConfig] = useState<AiSettingsConfig>(DEFAULT_AI_CONFIG);
+  const [isGeneratingDiffAi, setIsGeneratingDiffAi] = useState(false);
+  const [diffAiResult, setDiffAiResult] = useState<AiGenerationResult | null>(null);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [copiedResult, setCopiedResult] = useState(false);
+
+  useEffect(() => {
+    getAiSettings().then(setAiConfig);
+  }, []);
+
+  // Reset diff AI result when User B changes
+  useEffect(() => {
+    setDiffAiResult(null);
+  }, [userB?.id]);
 
   // Auto focus search input when entering edit mode
   useEffect(() => {
@@ -64,7 +88,6 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
   // Debounced live user search for User B
   useEffect(() => {
     if (!searchTerm.trim()) {
-      // When empty, show candidate users excluding User A
       const candidates = (candidateUsers.length > 0 ? candidateUsers : MOCK_TARGET_USERS).filter(
         (u) => u.id !== userA.id
       );
@@ -109,7 +132,7 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
     return () => clearTimeout(timer);
   }, [searchTerm, isMockMode, candidateUsers, userA.id]);
 
-  // Click outside to close dropdown and exit editing mode if userB already selected
+  // Click outside to close dropdown
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -123,7 +146,7 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [userB]);
 
-  // Strict boolean resolution (avoids truthy 'unknown' bug)
+  // Strict boolean resolution
   const canReadA = resultA.recordAccess?.read === true;
   const canEditA = resultA.recordAccess?.edit === true;
   const canDeleteA = resultA.recordAccess?.delete === true;
@@ -134,52 +157,56 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
   const canDeleteB = resultB?.recordAccess?.delete === true;
   const canTransferB = resultB?.recordAccess?.transfer === true;
 
-  // Compare Field-Level Security
-  const allFieldKeys = Array.from(
-    new Set([
-      ...resultA.fieldPermissions.map((f) => f.fieldApiName),
-      ...(resultB?.fieldPermissions || []).map((f) => f.fieldApiName),
-    ])
-  );
+  const diffPromptText = resultB ? generateDiffAiPrompt(resultA, resultB) : '';
 
-  const fieldDiffs = allFieldKeys.map((apiName) => {
-    const fA = resultA.fieldPermissions.find((f) => f.fieldApiName === apiName);
-    const fB = resultB?.fieldPermissions.find((f) => f.fieldApiName === apiName);
+  const handleRunDiffAi = async () => {
+    if (!resultB || isGeneratingDiffAi) return;
+    setIsGeneratingDiffAi(true);
+    setDiffAiResult(null);
 
-    const readA = fA?.readable === true ? 'Yes' : fA?.readable === false ? 'No' : 'Unknown';
-    const readB = fB?.readable === true ? 'Yes' : fB?.readable === false ? 'No' : 'Unknown';
-    const editA = fA?.editable === true ? 'Yes' : fA?.editable === false ? 'No' : 'Unknown';
-    const editB = fB?.editable === true ? 'Yes' : fB?.editable === false ? 'No' : 'Unknown';
-
-    const hasDiff = readA !== readB || editA !== editB;
-    const userAHigher = (readA === 'Yes' && readB === 'No') || (editA === 'Yes' && editB === 'No');
-    const userBHigher = (readB === 'Yes' && readA === 'No') || (editB === 'Yes' && editA === 'No');
-
-    return {
-      fieldApiName: apiName,
-      label: fA?.label || fB?.label || apiName,
-      readA,
-      readB,
-      editA,
-      editB,
-      sourceA: fA?.source,
-      sourceB: fB?.source,
-      hasDiff,
-      userAHigher,
-      userBHigher,
-    };
-  });
-
-  const filteredFields = fieldDiffs.filter((f) => {
-    if (filterMode === 'diff' && !f.hasDiff) return false;
-    if (filterMode === 'userA' && !f.userAHigher) return false;
-    if (filterMode === 'userB' && !f.userBHigher) return false;
-    if (flsSearch) {
-      const q = flsSearch.toLowerCase();
-      return f.fieldApiName.toLowerCase().includes(q) || f.label.toLowerCase().includes(q);
+    try {
+      const res = await executeAiChat(
+        [
+          {
+            id: `diff-${Date.now()}`,
+            role: 'user',
+            content: diffPromptText,
+            timestamp: new Date().toLocaleTimeString(),
+          },
+        ],
+        aiConfig
+      );
+      setDiffAiResult(res);
+    } catch (err: unknown) {
+      setDiffAiResult({
+        text: '',
+        provider: aiConfig.preferredProvider,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsGeneratingDiffAi(false);
     }
-    return true;
-  });
+  };
+
+  const handleCopyPrompt = () => {
+    if (!diffPromptText) return;
+    navigator.clipboard.writeText(diffPromptText);
+    setCopiedPrompt(true);
+    setTimeout(() => setCopiedPrompt(false), 2000);
+  };
+
+  const handleCopyResult = () => {
+    if (diffAiResult?.text) {
+      navigator.clipboard.writeText(diffAiResult.text);
+      setCopiedResult(true);
+      setTimeout(() => setCopiedResult(false), 2000);
+    }
+  };
+
+  const handleLaunchApp = (app: 'chatgpt' | 'claude' | 'copilot' | 'gemini') => {
+    if (!diffPromptText) return;
+    openExternalAiApp(app, diffPromptText);
+  };
 
   const renderStatus = (val: boolean | 'unknown' | undefined) => {
     if (val === true) {
@@ -269,7 +296,7 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
                     setSearchTerm('');
                     setShowDropdown(true);
                   }}
-                  className="text-[10px] font-semibold text-purple-600 hover:text-purple-800 transition-colors"
+                  className="text-[10px] font-semibold text-purple-600 hover:text-purple-800 transition-colors cursor-pointer"
                 >
                   Change User
                 </button>
@@ -315,7 +342,7 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
                       <button
                         type="button"
                         onClick={() => setSearchTerm('')}
-                        className="text-slate-400 hover:text-slate-600 p-0.5"
+                        className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
                         title="Clear search"
                       >
                         <X className="w-3 h-3" />
@@ -328,7 +355,7 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
                           setIsEditingUserB(false);
                           setShowDropdown(false);
                         }}
-                        className="text-[9px] text-slate-500 hover:text-slate-700 bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 rounded font-medium"
+                        className="text-[9px] text-slate-500 hover:text-slate-700 bg-slate-200 hover:bg-slate-300 px-1.5 py-0.5 rounded font-medium cursor-pointer"
                         title="Cancel change"
                       >
                         Cancel
@@ -400,11 +427,144 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
             Analyzing permissions & sharing for {userB.name}...
           </span>
           <span className="text-[10px] text-slate-400 block">
-            Inspecting UserRecordAccess, Share rows, Object CRUD & Field permissions
+            Inspecting UserRecordAccess, Share rows, Object CRUD & Sharing rules
           </span>
         </div>
       ) : resultB ? (
         <div className="space-y-3">
+          {/* AI Diff Summary Card (NEW) */}
+          <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-purple-950 text-white rounded-xl p-3.5 shadow-sm space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-1.5">
+                <Sparkles className="w-4 h-4 text-amber-400 fill-current animate-pulse" />
+                <span className="font-bold text-xs text-white">AI Access Discrepancy & Root Cause Summary</span>
+              </div>
+              <span className="text-[10px] bg-amber-400 text-slate-950 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                Diff Copilot
+              </span>
+            </div>
+            <p className="text-[11px] text-indigo-200 leading-relaxed">
+              Explains the exact structural security reason why {userA.name} can access/edit this record while {userB.name} is denied (or vice-versa), focusing purely on Record Sharing & Object CRUD.
+            </p>
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                onClick={handleRunDiffAi}
+                disabled={isGeneratingDiffAi}
+                className="py-2 px-3 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg shadow-sm flex items-center justify-center space-x-1.5 transition-all cursor-pointer"
+              >
+                {isGeneratingDiffAi ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Analyzing Diff...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4 text-amber-300 fill-current" />
+                    <span>Explain Diff with AI</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={handleCopyPrompt}
+                className="py-2 px-3 bg-white/95 hover:bg-white text-slate-900 font-bold text-xs rounded-lg shadow-sm flex items-center justify-center space-x-1.5 transition-all cursor-pointer"
+              >
+                {copiedPrompt ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-600" />
+                    <span className="text-emerald-700">Diff Prompt Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4 text-blue-600" />
+                    <span>Copy Diff Prompt</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* 1-Click Web Launchers for Diff Prompt */}
+            <div className="flex items-center justify-between pt-2 border-t border-white/10 text-[10px]">
+              <span className="text-slate-300">1-Click Launchers:</span>
+              <div className="flex items-center space-x-1.5">
+                <button
+                  onClick={() => handleLaunchApp('chatgpt')}
+                  className="px-2 py-0.5 bg-white/10 hover:bg-white/20 rounded font-semibold text-emerald-300 cursor-pointer"
+                >
+                  ChatGPT
+                </button>
+                <button
+                  onClick={() => handleLaunchApp('claude')}
+                  className="px-2 py-0.5 bg-white/10 hover:bg-white/20 rounded font-semibold text-amber-300 cursor-pointer"
+                >
+                  Claude
+                </button>
+                <button
+                  onClick={() => handleLaunchApp('gemini')}
+                  className="px-2 py-0.5 bg-white/10 hover:bg-white/20 rounded font-semibold text-blue-300 cursor-pointer"
+                >
+                  Gemini
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Render Diff AI Explanation Result */}
+          {diffAiResult && (
+            <div className="bg-white rounded-xl border border-purple-200 p-3 shadow-xs space-y-2 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                <div className="flex items-center space-x-1.5">
+                  <Bot className="w-4 h-4 text-purple-600" />
+                  <span className="font-bold text-xs text-slate-900">
+                    AI Comparative Root Cause Verdict
+                  </span>
+                  {diffAiResult.modelUsed && (
+                    <span className="text-[10px] bg-purple-50 text-purple-700 font-mono px-1.5 py-0.2 rounded font-semibold">
+                      {diffAiResult.modelUsed}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center space-x-1">
+                  <button
+                    onClick={handleCopyResult}
+                    className="p-1 text-slate-500 hover:text-slate-800 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                    title="Copy AI Diff"
+                  >
+                    {copiedResult ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                  <button
+                    onClick={() => setDiffAiResult(null)}
+                    className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                    title="Clear"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {diffAiResult.error ? (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-900 space-y-1">
+                  <div className="font-bold text-xs flex items-center">
+                    <AlertCircle className="w-3.5 h-3.5 mr-1 text-rose-600" />
+                    Diff AI Notice
+                  </div>
+                  <p className="text-[11px] leading-relaxed">{diffAiResult.error}</p>
+                  {onOpenSettings && (
+                    <button
+                      onClick={onOpenSettings}
+                      className="mt-1 text-[11px] font-bold text-rose-800 underline block cursor-pointer"
+                    >
+                      Configure AI Settings →
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <RichAiResponseView content={diffAiResult.text} />
+              )}
+            </div>
+          )}
+
           {/* 2. Effective Record Access Verdict Comparison Matrix */}
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
             <div className="p-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
@@ -449,7 +609,7 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
                   <td className="px-3 py-2 text-center">{renderDiscrepancyBadge(canDeleteA, canDeleteB)}</td>
                 </tr>
 
-                {/* Transfer (if supported/present) */}
+                {/* Transfer */}
                 {(resultA.recordAccess?.transfer !== undefined || resultB?.recordAccess?.transfer !== undefined) && (
                   <tr className={canTransferA !== canTransferB ? 'bg-amber-50/60' : ''}>
                     <td className="px-3 py-2 font-medium">Record Transfer</td>
@@ -571,118 +731,6 @@ export const UserDiffView: React.FC<UserDiffViewProps> = ({
                   <div className="text-[10px] text-slate-500 italic">No explicit share rows found</div>
                 )}
               </div>
-            </div>
-          </div>
-
-          {/* 5. Field-Level Security (FLS) Discrepancy Table */}
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs space-y-0">
-            <div className="p-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-              <span className="font-bold text-[11px] text-slate-800 flex items-center">
-                <Lock className="w-3.5 h-3.5 text-teal-600 mr-1.5" />
-                Field-Level Security (FLS) Diff ({filteredFields.length} of {allFieldKeys.length} fields)
-              </span>
-
-              {/* Filter Tabs */}
-              <div className="flex items-center space-x-1">
-                <button
-                  onClick={() => setFilterMode('diff')}
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
-                    filterMode === 'diff'
-                      ? 'bg-amber-500 text-white shadow-xs'
-                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                  }`}
-                >
-                  Discrepancies ({fieldDiffs.filter((f) => f.hasDiff).length})
-                </button>
-                <button
-                  onClick={() => setFilterMode('all')}
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
-                    filterMode === 'all'
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                  }`}
-                >
-                  All ({allFieldKeys.length})
-                </button>
-              </div>
-            </div>
-
-            {/* Filter Search */}
-            <div className="p-2 bg-slate-50/60 border-b border-slate-200">
-              <div className="relative">
-                <Search className="w-3 h-3 absolute left-2 top-2 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Filter fields by name or label..."
-                  value={flsSearch}
-                  onChange={(e) => setFlsSearch(e.target.value)}
-                  className="w-full pl-6 pr-2 py-1 text-[11px] border border-slate-300 rounded bg-white"
-                />
-              </div>
-            </div>
-
-            {/* Table */}
-            <div className="max-h-64 overflow-y-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-100 text-slate-600 text-[10px] uppercase font-bold sticky top-0 z-10">
-                  <tr>
-                    <th className="px-3 py-1.5">Field</th>
-                    <th className="px-2 py-1.5 text-center text-blue-900 font-bold">{userA.name}</th>
-                    <th className="px-2 py-1.5 text-center text-purple-900 font-bold">{userB.name}</th>
-                    <th className="px-2 py-1.5 text-center">Diff Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredFields.length > 0 ? (
-                    filteredFields.map((f) => (
-                      <tr
-                        key={f.fieldApiName}
-                        className={f.hasDiff ? 'bg-amber-50/40 hover:bg-amber-50 transition-colors' : 'hover:bg-slate-50'}
-                      >
-                        <td className="px-3 py-1.5">
-                          <div className="font-semibold text-slate-900 text-[11px]">{f.label}</div>
-                          <div className="text-[9px] text-slate-400 font-mono">{f.fieldApiName}</div>
-                        </td>
-                        <td className="px-2 py-1.5 text-center text-[10px]">
-                          <span className={f.readA === 'Yes' ? 'text-emerald-700 font-semibold' : 'text-rose-600'}>
-                            R: {f.readA}
-                          </span>
-                          <span className="text-slate-300 mx-1">|</span>
-                          <span className={f.editA === 'Yes' ? 'text-emerald-700 font-semibold' : 'text-rose-600'}>
-                            E: {f.editA}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5 text-center text-[10px]">
-                          <span className={f.readB === 'Yes' ? 'text-emerald-700 font-semibold' : 'text-rose-600'}>
-                            R: {f.readB}
-                          </span>
-                          <span className="text-slate-300 mx-1">|</span>
-                          <span className={f.editB === 'Yes' ? 'text-emerald-700 font-semibold' : 'text-rose-600'}>
-                            E: {f.editB}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5 text-center">
-                          {f.hasDiff ? (
-                            <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">
-                              {f.userAHigher ? `${userA.name} Higher` : f.userBHigher ? `${userB.name} Higher` : 'Diff'}
-                            </span>
-                          ) : (
-                            <span className="text-[9px] text-slate-400 font-medium">Identical</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={4} className="p-4 text-center text-[11px] text-slate-400">
-                        {filterMode === 'diff'
-                          ? 'Zero permission discrepancies found! Both users have identical field security.'
-                          : 'No fields match your filter.'}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
             </div>
           </div>
         </div>

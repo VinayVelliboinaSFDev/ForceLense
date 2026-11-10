@@ -16,11 +16,11 @@ import {
   Settings,
   AlertCircle,
   RotateCcw,
-  CheckCircle2,
   Send,
   User,
   MessageSquare,
   HelpCircle,
+  Database,
 } from 'lucide-react';
 import { AnalysisResult } from '../types';
 import { generateAiPrompt, openExternalAiApp } from '../analyzers/ai-prompt-generator';
@@ -28,13 +28,20 @@ import { getAiSettings, DEFAULT_AI_CONFIG } from '../ai/ai-store';
 import { checkChromeBuiltinAi, executeAiChat } from '../ai/ai-service';
 import { AiSettingsConfig, ChromeBuiltinAiStatus, AiGenerationResult, ChatMessage } from '../ai/ai-types';
 import { RichAiResponseView } from './RichAiResponseView';
+import { validateAndSanitizeSoql } from '../salesforce/soql-safety';
+import { sfApi } from '../salesforce/api-client';
 
 interface AiExplainerTabProps {
   result: AnalysisResult;
   onOpenSettings?: () => void;
+  isMockMode?: boolean;
 }
 
-export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSettings }) => {
+export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({
+  result,
+  onOpenSettings,
+  isMockMode = false,
+}) => {
   const [copied, setCopied] = useState(false);
   const [showPromptPreview, setShowPromptPreview] = useState(false);
   const [activeToast, setActiveToast] = useState<string | null>(null);
@@ -45,6 +52,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
 
   // Conversation & Generation State
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isQueryingSalesforce, setIsQueryingSalesforce] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [executionError, setExecutionError] = useState<string | null>(null);
@@ -53,17 +61,32 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const promptText = generateAiPrompt(result);
 
+  // Track active record and user context to preserve chat across tab switching
+  // but cleanly reset when target user or record changes
+  const currentContextKey = `${result.recordId}:${result.targetUserId}`;
+  const prevContextKeyRef = useRef(currentContextKey);
+
   useEffect(() => {
     getAiSettings().then(setAiConfig);
     checkChromeBuiltinAi().then(setChromeAiStatus);
   }, []);
 
   useEffect(() => {
+    // If the record or target user changes, reset the conversation
+    if (prevContextKeyRef.current !== currentContextKey) {
+      prevContextKeyRef.current = currentContextKey;
+      setChatMessages([]);
+      setExecutionError(null);
+      setInputText('');
+    }
+  }, [currentContextKey]);
+
+  useEffect(() => {
     // Scroll smoothly to bottom when new messages arrive
     if (chatMessages.length > 0) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [chatMessages, isGenerating]);
+  }, [chatMessages, isGenerating, isQueryingSalesforce]);
 
   const triggerToast = (msg: string) => {
     setActiveToast(msg);
@@ -111,7 +134,59 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
   };
 
   /**
-   * Runs the initial verdict analysis using the comprehensive verified evidence prompt
+   * Executes a read-only SOQL query against Salesforce with safety checks
+   */
+  const executeQuerySafely = async (
+    rawSoql: string
+  ): Promise<{ records: Record<string, unknown>[]; error?: string; query: string }> => {
+    const val = validateAndSanitizeSoql(rawSoql);
+    if (!val.valid) {
+      return { records: [], error: val.error, query: rawSoql };
+    }
+
+    if (isMockMode) {
+      // Simulate intelligent mock response for mock/offline testing
+      if (/FROM\s+UserRole/i.test(val.sanitized)) {
+        return {
+          records: [
+            { Id: '00E000000000001', Name: 'Global Support Lead', DeveloperName: 'Global_Support_Lead' },
+          ],
+          query: val.sanitized,
+        };
+      }
+      if (/FROM\s+Group/i.test(val.sanitized)) {
+        return {
+          records: [
+            { Id: '00G000000000001', Name: 'Support Tier 1 Queue', Type: 'Queue' },
+          ],
+          query: val.sanitized,
+        };
+      }
+      if (/FROM\s+Case/i.test(val.sanitized)) {
+        return {
+          records: [
+            { Id: result.recordId, CaseNumber: '00001001', Subject: 'Customer Connectivity Issue' },
+          ],
+          query: val.sanitized,
+        };
+      }
+      return {
+        records: [{ Id: 'mock_record_1', Name: 'Mock Salesforce Record' }],
+        query: val.sanitized,
+      };
+    }
+
+    try {
+      const records = await sfApi.query<Record<string, unknown>>(val.sanitized);
+      return { records, query: val.sanitized };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { records: [], error: msg, query: val.sanitized };
+    }
+  };
+
+  /**
+   * Runs the initial verdict analysis using the verified evidence prompt
    */
   const handleRunInitialAnalysis = async () => {
     setIsGenerating(true);
@@ -142,7 +217,6 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
           modelUsed: res.modelUsed,
           isInitialVerdict: true,
         };
-        // We only show the assistant verdict in the visible message list so the massive raw prompt doesn't clutter the chat
         setChatMessages([assistantMsg]);
         triggerToast('AI Access Analysis generated successfully!');
       }
@@ -157,6 +231,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
 
   /**
    * Sends a follow-up question in the ongoing multi-turn conversation
+   * Supports Agentic Tool Calling: Executes read-only SOQL queries against Salesforce if needed
    */
   const handleSendFollowUp = async (customPrompt?: string) => {
     const textToSend = customPrompt || inputText.trim();
@@ -172,11 +247,23 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    // Full history including the root evidence prompt for context grounding
+    // Root evidence prompt for context grounding
     const initialEvidencePrompt: ChatMessage = {
       id: 'root-evidence-prompt',
       role: 'user',
       content: promptText,
+      timestamp: '',
+    };
+
+    const systemCapabilityNotice: ChatMessage = {
+      id: 'system-capability',
+      role: 'system',
+      content: `You are ForceLens Copilot, an expert Salesforce security assistant.
+Verified record access evidence is provided above.
+If answering the user's question requires additional details from the connected Salesforce org (e.g. looking up a User, UserRole, Group, GroupMember, Share tables, ObjectPermissions, or PermissionSets), you have read-only access!
+To query Salesforce, output:
+[SALESFORCE_QUERY: SELECT <fields> FROM <sobject> WHERE <condition>]
+ForceLens will automatically execute your read-only SOQL query against Salesforce and supply the live records to you to formulate your final answer.`,
       timestamp: '',
     };
 
@@ -186,17 +273,57 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
 
     try {
       const activeConfig = getActiveConfig();
-      // Send root evidence + subsequent conversation turns
-      const conversationPayload: ChatMessage[] = [
+      let conversationPayload: ChatMessage[] = [
         initialEvidencePrompt,
-        ...chatMessages.map((m) => ({
-          ...m,
-          // exclude initial verdict marker for API serialization
-        })),
+        systemCapabilityNotice,
+        ...chatMessages,
         newUserMsg,
       ];
 
-      const res: AiGenerationResult = await executeAiChat(conversationPayload, activeConfig);
+      let res: AiGenerationResult = await executeAiChat(conversationPayload, activeConfig);
+
+      // Check if the AI Copilot requested a read-only Salesforce query
+      const queryMatch =
+        res.text.match(/\[SALESFORCE_QUERY:\s*(SELECT[\s\S]*?)\]/i) ||
+        res.text.match(/```soql\s*(SELECT[\s\S]*?)```/i);
+
+      let queryExecutedText: string | undefined;
+      let queryRecordCount: number | undefined;
+
+      if (queryMatch && !res.error) {
+        const rawQuery = queryMatch[1].trim();
+        setIsQueryingSalesforce(true);
+
+        const queryOutcome = await executeQuerySafely(rawQuery);
+        queryExecutedText = queryOutcome.query;
+        queryRecordCount = queryOutcome.records.length;
+
+        setIsQueryingSalesforce(false);
+
+        // Feed query results back to model for synthesis
+        const queryResultMsg: ChatMessage = {
+          id: `query-result-${Date.now()}`,
+          role: 'user',
+          content: queryOutcome.error
+            ? `[Salesforce Live Query Attempt Failed]\nQuery: ${rawQuery}\nError: ${queryOutcome.error}\nPlease answer the user explaining this restriction.`
+            : `[Salesforce Live Query Results]\nQuery: ${queryOutcome.query}\nRecords (${queryOutcome.records.length}):\n${JSON.stringify(queryOutcome.records, null, 2)}\nPlease synthesize your final answer to the user based on these live Salesforce records.`,
+          timestamp: '',
+        };
+
+        conversationPayload = [
+          ...conversationPayload,
+          {
+            id: `assistant-call-${Date.now()}`,
+            role: 'assistant',
+            content: res.text,
+            timestamp: '',
+          },
+          queryResultMsg,
+        ];
+
+        // Second turn with live data
+        res = await executeAiChat(conversationPayload, activeConfig);
+      }
 
       if (res.error) {
         setExecutionError(res.error);
@@ -208,6 +335,8 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
           content: res.text,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           modelUsed: res.modelUsed,
+          queryExecuted: queryExecutedText,
+          recordCount: queryRecordCount,
         };
         setChatMessages([...updatedVisibleMessages, assistantMsg]);
       }
@@ -217,6 +346,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
       triggerToast(`Error: ${msg}`);
     } finally {
       setIsGenerating(false);
+      setIsQueryingSalesforce(false);
     }
   };
 
@@ -246,12 +376,12 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
 
   const currentBadge = getProviderBadge();
   const IconComp = currentBadge.icon;
-
   const userName = result.targetUserName || 'this user';
+
   const quickSuggestionPrompts = [
     `How do I grant Edit access to ${userName} without changing Profile permissions?`,
     `Which specific Sharing Rule (Owner-based or Criteria-based) should I create?`,
-    `Why are restricted fields hidden from ${userName}?`,
+    `Why is Edit blocked if ${userName} has Profile Edit rights?`,
     `Draft a polite resolution ticket reply explaining why Edit is denied.`,
   ];
 
@@ -285,7 +415,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
               Instant Salesforce Access Root Cause & Remediation
             </h3>
             <p className="text-[11px] text-indigo-200/90 leading-relaxed max-w-sm">
-              Analyzes verified Salesforce provenance facts, explains visibility discrepancies, and chats interactively with you to remediate access blockers.
+              Analyzes verified Salesforce record access & sharing rules, explains blockers, and queries your org live for deep root-cause investigation.
             </p>
           </div>
           <Bot className="w-8 h-8 text-indigo-400/80 shrink-0" />
@@ -372,7 +502,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
             </span>
             <button
               onClick={() => setExecutionError(null)}
-              className="text-rose-500 hover:text-rose-700 text-[10px] font-bold"
+              className="text-rose-500 hover:text-rose-700 text-[10px] font-bold cursor-pointer"
             >
               Dismiss
             </button>
@@ -462,6 +592,21 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
                         </button>
                       </div>
 
+                      {/* Live Salesforce Query Badge (if executed by ForceLens) */}
+                      {msg.queryExecuted && (
+                        <div className="flex items-center justify-between p-2 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-lg text-[10px] font-mono shadow-2xs">
+                          <div className="flex items-center space-x-1.5 truncate">
+                            <Database className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span className="truncate">
+                              <strong>Queried Salesforce:</strong> {msg.queryExecuted}
+                            </span>
+                          </div>
+                          <span className="shrink-0 ml-2 bg-emerald-200 text-emerald-950 font-bold px-1.5 py-0.2 rounded text-[9px]">
+                            {msg.recordCount ?? 0} row{msg.recordCount === 1 ? '' : 's'}
+                          </span>
+                        </div>
+                      )}
+
                       {/* Render Rich Cards / Scorecards / Markdown */}
                       <RichAiResponseView content={msg.content} />
                     </div>
@@ -474,8 +619,18 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
               );
             })}
 
+            {/* Querying Salesforce Indicator */}
+            {isQueryingSalesforce && (
+              <div className="flex items-center space-x-2 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-900 text-xs animate-pulse">
+                <Database className="w-4 h-4 animate-bounce text-emerald-600 shrink-0" />
+                <span className="font-medium text-[11px]">
+                  ForceLens is querying your Salesforce org with read-only SOQL for live verification...
+                </span>
+              </div>
+            )}
+
             {/* Thinking / Loader Indicator */}
-            {isGenerating && (
+            {isGenerating && !isQueryingSalesforce && (
               <div className="flex items-center space-x-2 p-2.5 bg-indigo-50/60 border border-indigo-100 rounded-lg text-indigo-900 text-xs animate-pulse">
                 <Loader2 className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
                 <span className="font-medium text-[11px]">
@@ -522,7 +677,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Ask a follow-up question (e.g. 'How do I grant access via a Permission Set?')..."
+                placeholder="Ask follow-up or query org (e.g. 'Query Melissa role' or 'How to fix via Sharing Rule?')..."
                 disabled={isGenerating}
                 className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 disabled:opacity-60"
               />
