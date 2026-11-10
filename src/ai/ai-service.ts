@@ -3,6 +3,7 @@ import {
   AiSettingsConfig,
   ChromeBuiltinAiStatus,
   AiGenerationResult,
+  ChatMessage,
 } from './ai-types';
 
 /**
@@ -112,7 +113,7 @@ export async function testOllamaConnection(endpoint = 'http://localhost:11434'):
 }
 
 /**
- * Executes prompt on local Ollama server
+ * Executes prompt on local Ollama server (supports both single prompt and multi-turn chat)
  */
 export async function runOllama(prompt: string, endpoint = 'http://localhost:11434', model = 'llama3:latest'): Promise<string> {
   const cleanEndpoint = endpoint.replace(/\/+$/, '');
@@ -136,9 +137,56 @@ export async function runOllama(prompt: string, endpoint = 'http://localhost:114
 }
 
 /**
- * Executes prompt on OpenAI API
+ * Multi-turn conversation on Ollama /api/chat
+ */
+export async function runOllamaChat(
+  messages: ChatMessage[],
+  endpoint = 'http://localhost:11434',
+  model = 'llama3:latest'
+): Promise<string> {
+  const cleanEndpoint = endpoint.replace(/\/+$/, '');
+  try {
+    const res = await fetch(`${cleanEndpoint}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model || 'llama3:latest',
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        stream: false,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return data.message?.content || data.response || '';
+    }
+  } catch {
+    // Fall back to /api/generate with concatenated transcript
+  }
+
+  const transcript = messages.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n') + '\n\nAssistant:';
+  return runOllama(transcript, endpoint, model);
+}
+
+/**
+ * Executes prompt on OpenAI API (supports multi-turn)
  */
 export async function runOpenAi(prompt: string, apiKey: string, model = 'gpt-4o-mini'): Promise<string> {
+  return runOpenAiChat(
+    [{ id: '1', role: 'user', content: prompt, timestamp: new Date().toISOString() }],
+    apiKey,
+    model
+  );
+}
+
+export async function runOpenAiChat(
+  messages: ChatMessage[],
+  apiKey: string,
+  model = 'gpt-4o-mini'
+): Promise<string> {
   if (!apiKey) throw new Error('OpenAI API Key is missing. Please set it in Settings.');
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -152,9 +200,9 @@ export async function runOpenAi(prompt: string, apiKey: string, model = 'gpt-4o-
       messages: [
         {
           role: 'system',
-          content: 'You are an expert Salesforce CTA and Security Architect. Provide precise, actionable analysis of permissions and sharing provenance.',
+          content: 'You are an expert Salesforce CTA and Security Architect. Provide precise, actionable analysis and answers to follow-up questions based on the verified evidence.',
         },
-        { role: 'user', content: prompt },
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
       ],
       temperature: 0.2,
     }),
@@ -170,9 +218,21 @@ export async function runOpenAi(prompt: string, apiKey: string, model = 'gpt-4o-
 }
 
 /**
- * Executes prompt on Anthropic API
+ * Executes prompt on Anthropic API (supports multi-turn)
  */
 export async function runAnthropic(prompt: string, apiKey: string, model = 'claude-3-5-sonnet-latest'): Promise<string> {
+  return runAnthropicChat(
+    [{ id: '1', role: 'user', content: prompt, timestamp: new Date().toISOString() }],
+    apiKey,
+    model
+  );
+}
+
+export async function runAnthropicChat(
+  messages: ChatMessage[],
+  apiKey: string,
+  model = 'claude-3-5-sonnet-latest'
+): Promise<string> {
   if (!apiKey) throw new Error('Anthropic API Key is missing. Please set it in Settings.');
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -186,8 +246,10 @@ export async function runAnthropic(prompt: string, apiKey: string, model = 'clau
     body: JSON.stringify({
       model: model || 'claude-3-5-sonnet-latest',
       max_tokens: 1500,
-      system: 'You are an expert Salesforce CTA and Security Architect. Analyze verified Salesforce access signals concisely.',
-      messages: [{ role: 'user', content: prompt }],
+      system: 'You are an expert Salesforce CTA and Security Architect. Answer questions about access provenance and setup remediation concisely.',
+      messages: messages
+        .filter((m) => m.role !== 'system')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     }),
   });
 
@@ -204,6 +266,18 @@ export async function runAnthropic(prompt: string, apiKey: string, model = 'clau
  * Executes prompt on Google Gemini API with support for modern Gemini Studio keys and auto-fallback
  */
 export async function runGemini(prompt: string, apiKey: string, model = 'gemini-flash-lite-latest'): Promise<string> {
+  return runGeminiChat(
+    [{ id: '1', role: 'user', content: prompt, timestamp: new Date().toISOString() }],
+    apiKey,
+    model
+  );
+}
+
+export async function runGeminiChat(
+  messages: ChatMessage[],
+  apiKey: string,
+  model = 'gemini-flash-lite-latest'
+): Promise<string> {
   if (!apiKey) throw new Error('Gemini API Key is missing. Please set it in Settings.');
 
   const keyTrimmed = apiKey.trim();
@@ -223,6 +297,14 @@ export async function runGemini(prompt: string, apiKey: string, model = 'gemini-
 
   let lastError = '';
 
+  // Format multi-turn conversation for Gemini API
+  const contents = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
+
   for (const candidate of candidateModels) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent?key=${encodeURIComponent(keyTrimmed)}`;
@@ -233,9 +315,7 @@ export async function runGemini(prompt: string, apiKey: string, model = 'gemini-
           'Content-Type': 'application/json',
           'x-goog-api-key': keyTrimmed,
         },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
+        body: JSON.stringify({ contents }),
       });
 
       if (!res.ok) {
@@ -266,10 +346,23 @@ export async function runGemini(prompt: string, apiKey: string, model = 'gemini-
 }
 
 /**
- * Main dispatcher: Executes AI explanation according to configured or available provider
+ * Main dispatcher: Executes single prompt AI analysis
  */
 export async function executeAiAnalysis(
   promptText: string,
+  config: AiSettingsConfig
+): Promise<AiGenerationResult> {
+  return executeAiChat(
+    [{ id: 'initial-prompt', role: 'user', content: promptText, timestamp: new Date().toISOString() }],
+    config
+  );
+}
+
+/**
+ * Multi-Turn Dispatcher: Executes conversational multi-turn chat across configured providers
+ */
+export async function executeAiChat(
+  messages: ChatMessage[],
   config: AiSettingsConfig
 ): Promise<AiGenerationResult> {
   const provider = config.preferredProvider;
@@ -277,23 +370,27 @@ export async function executeAiAnalysis(
   try {
     switch (provider) {
       case 'chrome-builtin': {
-        const text = await runChromeBuiltinAi(promptText);
+        // Multi-turn transcript for on-device Gemini Nano
+        const conversationPrompt = messages
+          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+          .join('\n\n') + '\n\nAssistant:';
+        const text = await runChromeBuiltinAi(conversationPrompt);
         return { text, provider: 'chrome-builtin', modelUsed: 'Gemini Nano (On-Device)' };
       }
       case 'ollama': {
-        const text = await runOllama(promptText, config.ollamaEndpoint, config.ollamaModel);
+        const text = await runOllamaChat(messages, config.ollamaEndpoint, config.ollamaModel);
         return { text, provider: 'ollama', modelUsed: `Ollama (${config.ollamaModel || 'llama3'})` };
       }
       case 'openai': {
-        const text = await runOpenAi(promptText, config.openaiApiKey || '', config.openaiModel);
+        const text = await runOpenAiChat(messages, config.openaiApiKey || '', config.openaiModel);
         return { text, provider: 'openai', modelUsed: config.openaiModel || 'gpt-4o-mini' };
       }
       case 'anthropic': {
-        const text = await runAnthropic(promptText, config.anthropicApiKey || '', config.anthropicModel);
+        const text = await runAnthropicChat(messages, config.anthropicApiKey || '', config.anthropicModel);
         return { text, provider: 'anthropic', modelUsed: config.anthropicModel || 'claude-3-5-sonnet' };
       }
       case 'gemini': {
-        const text = await runGemini(promptText, config.geminiApiKey || '', config.geminiModel);
+        const text = await runGeminiChat(messages, config.geminiApiKey || '', config.geminiModel);
         return { text, provider: 'gemini', modelUsed: config.geminiModel || 'gemini-flash-lite-latest' };
       }
       case 'web-launchers':
@@ -309,3 +406,4 @@ export async function executeAiAnalysis(
     };
   }
 }
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
   Copy,
@@ -10,7 +10,6 @@ import {
   ShieldCheck,
   Bot,
   Zap,
-  Play,
   Loader2,
   Cpu,
   Server,
@@ -18,12 +17,17 @@ import {
   AlertCircle,
   RotateCcw,
   CheckCircle2,
+  Send,
+  User,
+  MessageSquare,
+  HelpCircle,
 } from 'lucide-react';
 import { AnalysisResult } from '../types';
 import { generateAiPrompt, openExternalAiApp } from '../analyzers/ai-prompt-generator';
 import { getAiSettings, DEFAULT_AI_CONFIG } from '../ai/ai-store';
-import { checkChromeBuiltinAi, executeAiAnalysis } from '../ai/ai-service';
-import { AiSettingsConfig, ChromeBuiltinAiStatus, AiGenerationResult } from '../ai/ai-types';
+import { checkChromeBuiltinAi, executeAiChat } from '../ai/ai-service';
+import { AiSettingsConfig, ChromeBuiltinAiStatus, AiGenerationResult, ChatMessage } from '../ai/ai-types';
+import { RichAiResponseView } from './RichAiResponseView';
 
 interface AiExplainerTabProps {
   result: AnalysisResult;
@@ -32,22 +36,34 @@ interface AiExplainerTabProps {
 
 export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSettings }) => {
   const [copied, setCopied] = useState(false);
-  const [copiedResult, setCopiedResult] = useState(false);
   const [showPromptPreview, setShowPromptPreview] = useState(false);
   const [activeToast, setActiveToast] = useState<string | null>(null);
 
-  // AI execution states
+  // AI Configuration & Status
   const [aiConfig, setAiConfig] = useState<AiSettingsConfig>(DEFAULT_AI_CONFIG);
   const [chromeAiStatus, setChromeAiStatus] = useState<ChromeBuiltinAiStatus | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationResult, setGenerationResult] = useState<AiGenerationResult | null>(null);
 
+  // Conversation & Generation State
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [executionError, setExecutionError] = useState<string | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const promptText = generateAiPrompt(result);
 
   useEffect(() => {
     getAiSettings().then(setAiConfig);
     checkChromeBuiltinAi().then(setChromeAiStatus);
   }, []);
+
+  useEffect(() => {
+    // Scroll smoothly to bottom when new messages arrive
+    if (chatMessages.length > 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, isGenerating]);
 
   const triggerToast = (msg: string) => {
     setActiveToast(msg);
@@ -61,13 +77,11 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleCopyResult = () => {
-    if (generationResult?.text) {
-      navigator.clipboard.writeText(generationResult.text);
-      setCopiedResult(true);
-      triggerToast('AI Analysis copied to clipboard!');
-      setTimeout(() => setCopiedResult(false), 2000);
-    }
+  const handleCopyMessage = (msgId: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedMessageId(msgId);
+    triggerToast('Message content copied to clipboard!');
+    setTimeout(() => setCopiedMessageId(null), 2000);
   };
 
   const handleLaunchApp = (app: 'chatgpt' | 'claude' | 'copilot' | 'gemini', appName: string) => {
@@ -75,40 +89,142 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
     triggerToast(`Prompt copied! Opening ${appName} in a new tab... Press Cmd+V / Ctrl+V to paste.`);
   };
 
-  const handleRunInExtensionAi = async () => {
-    setIsGenerating(true);
-    setGenerationResult(null);
-    try {
-      // If user selected web launchers but clicked in-extension run, use chrome-builtin if available, else ollama/openai
-      let activeConfig = { ...aiConfig };
-      if (activeConfig.preferredProvider === 'web-launchers') {
-        if (chromeAiStatus?.available) {
-          activeConfig.preferredProvider = 'chrome-builtin';
-        } else if (activeConfig.ollamaEndpoint) {
-          activeConfig.preferredProvider = 'ollama';
-        } else if (activeConfig.openaiApiKey) {
-          activeConfig.preferredProvider = 'openai';
-        }
+  /**
+   * Helper to resolve active provider config
+   */
+  const getActiveConfig = (): AiSettingsConfig => {
+    let activeConfig = { ...aiConfig };
+    if (activeConfig.preferredProvider === 'web-launchers') {
+      if (chromeAiStatus?.available) {
+        activeConfig.preferredProvider = 'chrome-builtin';
+      } else if (activeConfig.ollamaEndpoint) {
+        activeConfig.preferredProvider = 'ollama';
+      } else if (activeConfig.geminiApiKey) {
+        activeConfig.preferredProvider = 'gemini';
+      } else if (activeConfig.openaiApiKey) {
+        activeConfig.preferredProvider = 'openai';
+      } else if (activeConfig.anthropicApiKey) {
+        activeConfig.preferredProvider = 'anthropic';
       }
+    }
+    return activeConfig;
+  };
 
-      const res = await executeAiAnalysis(promptText, activeConfig);
-      setGenerationResult(res);
+  /**
+   * Runs the initial verdict analysis using the comprehensive verified evidence prompt
+   */
+  const handleRunInitialAnalysis = async () => {
+    setIsGenerating(true);
+    setExecutionError(null);
+    setChatMessages([]);
+
+    const activeConfig = getActiveConfig();
+
+    try {
+      const initialUserMsg: ChatMessage = {
+        id: 'initial-prompt',
+        role: 'user',
+        content: promptText,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      const res: AiGenerationResult = await executeAiChat([initialUserMsg], activeConfig);
+
       if (res.error) {
+        setExecutionError(res.error);
         triggerToast(`Analysis failed: ${res.error}`);
       } else {
-        triggerToast('AI Analysis generated successfully!');
+        const assistantMsg: ChatMessage = {
+          id: `msg-${Date.now()}`,
+          role: 'assistant',
+          content: res.text,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          modelUsed: res.modelUsed,
+          isInitialVerdict: true,
+        };
+        // We only show the assistant verdict in the visible message list so the massive raw prompt doesn't clutter the chat
+        setChatMessages([assistantMsg]);
+        triggerToast('AI Access Analysis generated successfully!');
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setGenerationResult({
-        text: '',
-        provider: aiConfig.preferredProvider,
-        error: msg,
-      });
+      setExecutionError(msg);
       triggerToast(`Error: ${msg}`);
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  /**
+   * Sends a follow-up question in the ongoing multi-turn conversation
+   */
+  const handleSendFollowUp = async (customPrompt?: string) => {
+    const textToSend = customPrompt || inputText.trim();
+    if (!textToSend || isGenerating) return;
+
+    setInputText('');
+    setExecutionError(null);
+
+    const newUserMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: textToSend,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    // Full history including the root evidence prompt for context grounding
+    const initialEvidencePrompt: ChatMessage = {
+      id: 'root-evidence-prompt',
+      role: 'user',
+      content: promptText,
+      timestamp: '',
+    };
+
+    const updatedVisibleMessages = [...chatMessages, newUserMsg];
+    setChatMessages(updatedVisibleMessages);
+    setIsGenerating(true);
+
+    try {
+      const activeConfig = getActiveConfig();
+      // Send root evidence + subsequent conversation turns
+      const conversationPayload: ChatMessage[] = [
+        initialEvidencePrompt,
+        ...chatMessages.map((m) => ({
+          ...m,
+          // exclude initial verdict marker for API serialization
+        })),
+        newUserMsg,
+      ];
+
+      const res: AiGenerationResult = await executeAiChat(conversationPayload, activeConfig);
+
+      if (res.error) {
+        setExecutionError(res.error);
+        triggerToast(`Follow-up failed: ${res.error}`);
+      } else {
+        const assistantMsg: ChatMessage = {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          content: res.text,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          modelUsed: res.modelUsed,
+        };
+        setChatMessages([...updatedVisibleMessages, assistantMsg]);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setExecutionError(msg);
+      triggerToast(`Error: ${msg}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleResetConversation = () => {
+    setChatMessages([]);
+    setExecutionError(null);
+    setInputText('');
+    triggerToast('Conversation cleared.');
   };
 
   const getProviderBadge = () => {
@@ -131,6 +247,14 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
   const currentBadge = getProviderBadge();
   const IconComp = currentBadge.icon;
 
+  const userName = result.targetUserName || 'this user';
+  const quickSuggestionPrompts = [
+    `How do I grant Edit access to ${userName} without changing Profile permissions?`,
+    `Which specific Sharing Rule (Owner-based or Criteria-based) should I create?`,
+    `Why are restricted fields hidden from ${userName}?`,
+    `Draft a polite resolution ticket reply explaining why Edit is denied.`,
+  ];
+
   return (
     <div className="space-y-3 text-xs">
       {/* Toast Notice */}
@@ -150,7 +274,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
             <div className="flex items-center space-x-1.5">
               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-400 text-slate-950 uppercase tracking-wider">
                 <Sparkles className="w-3 h-3 mr-1 fill-current" />
-                Dual-Tier AI Engine
+                AI Security Copilot
               </span>
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border border-white/10 ${currentBadge.color}`}>
                 <IconComp className="w-3 h-3 mr-1" />
@@ -161,7 +285,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
               Instant Salesforce Access Root Cause & Remediation
             </h3>
             <p className="text-[11px] text-indigo-200/90 leading-relaxed max-w-sm">
-              Runs zero-setup with Chrome Built-In AI & 1-Click Web Launchers for everyday users, or local Ollama / custom API keys for enterprise privacy.
+              Analyzes verified Salesforce provenance facts, explains visibility discrepancies, and chats interactively with you to remediate access blockers.
             </p>
           </div>
           <Bot className="w-8 h-8 text-indigo-400/80 shrink-0" />
@@ -171,11 +295,11 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
         <div className="grid grid-cols-2 gap-2">
           {/* In-Extension Execution Button */}
           <button
-            onClick={handleRunInExtensionAi}
+            onClick={handleRunInitialAnalysis}
             disabled={isGenerating}
             className="w-full py-2 px-3 bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-600 hover:to-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg shadow-sm flex items-center justify-center space-x-1.5 transition-all cursor-pointer"
           >
-            {isGenerating ? (
+            {isGenerating && chatMessages.length === 0 ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin text-white" />
                 <span>Analyzing Signals...</span>
@@ -184,7 +308,9 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
               <>
                 <Zap className="w-4 h-4 text-amber-300 fill-current" />
                 <span>
-                  {aiConfig.preferredProvider === 'ollama'
+                  {chatMessages.length > 0
+                    ? 'Re-Run Analysis'
+                    : aiConfig.preferredProvider === 'ollama'
                     ? 'Run Local Ollama'
                     : aiConfig.preferredProvider === 'openai'
                     ? 'Run OpenAI API'
@@ -222,7 +348,7 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
           <div className="p-2 bg-indigo-950/60 border border-indigo-800/80 rounded text-[10px] text-indigo-200 flex items-center justify-between">
             <span className="flex items-center">
               <Cpu className="w-3.5 h-3.5 mr-1 text-amber-400 shrink-0" />
-              Chrome Built-in AI not active in this browser. Use 1-Click Launchers below or configure Ollama in Settings.
+              Chrome Built-in AI not active in this browser. Use 1-Click Launchers below or configure Ollama / Gemini in Settings.
             </span>
             {onOpenSettings && (
               <button
@@ -236,60 +362,184 @@ export const AiExplainerTab: React.FC<AiExplainerTabProps> = ({ result, onOpenSe
         )}
       </div>
 
-      {/* Generated In-Extension Result Box */}
-      {generationResult && (
-        <div className="bg-white rounded-xl border border-indigo-200 p-3.5 shadow-sm space-y-2.5 animate-in fade-in duration-200">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+      {/* Execution Error Notice */}
+      {executionError && (
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 space-y-1.5 animate-in fade-in duration-150">
+          <div className="font-bold text-xs flex items-center justify-between">
+            <span className="flex items-center">
+              <AlertCircle className="w-4 h-4 mr-1.5 text-rose-600 shrink-0" />
+              AI Execution Error
+            </span>
+            <button
+              onClick={() => setExecutionError(null)}
+              className="text-rose-500 hover:text-rose-700 text-[10px] font-bold"
+            >
+              Dismiss
+            </button>
+          </div>
+          <p className="text-[11px] leading-relaxed font-mono">{executionError}</p>
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="mt-1 text-[11px] font-bold text-rose-800 underline block cursor-pointer"
+            >
+              Configure API Keys / Models in Settings →
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Interactive Chat Stream & Verdict Display */}
+      {chatMessages.length > 0 && (
+        <div className="bg-slate-50/70 border border-slate-200 rounded-xl p-3 shadow-xs space-y-3 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
             <div className="flex items-center space-x-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <MessageSquare className="w-4 h-4 text-indigo-600" />
               <span className="font-bold text-xs text-slate-900">
-                AI Access Analysis Verdict
+                AI Copilot Conversation
               </span>
-              {generationResult.modelUsed && (
-                <span className="text-[10px] bg-indigo-50 text-indigo-700 font-mono px-1.5 py-0.2 rounded font-semibold border border-indigo-100">
-                  {generationResult.modelUsed}
-                </span>
-              )}
+              <span className="text-[10px] bg-indigo-100 text-indigo-800 font-semibold px-2 py-0.5 rounded-full">
+                {chatMessages.length} message{chatMessages.length > 1 ? 's' : ''}
+              </span>
             </div>
-            <div className="flex items-center space-x-1">
-              <button
-                onClick={handleCopyResult}
-                className="p-1 text-slate-500 hover:text-slate-800 rounded hover:bg-slate-100 transition-colors"
-                title="Copy AI analysis"
-              >
-                {copiedResult ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-              <button
-                onClick={() => setGenerationResult(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-100 transition-colors"
-                title="Clear result"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            </div>
+            <button
+              onClick={handleResetConversation}
+              className="flex items-center text-[10px] text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded font-semibold transition-colors cursor-pointer"
+              title="Reset conversation"
+            >
+              <RotateCcw className="w-3 h-3 mr-1" />
+              Reset
+            </button>
           </div>
 
-          {generationResult.error ? (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-900 space-y-1">
-              <div className="font-bold text-xs flex items-center">
-                <AlertCircle className="w-3.5 h-3.5 mr-1 text-rose-600" />
-                Analysis Execution Notice
-              </div>
-              <p className="text-[11px] leading-relaxed">{generationResult.error}</p>
-              {onOpenSettings && (
-                <button
-                  onClick={onOpenSettings}
-                  className="mt-1 text-[11px] font-bold text-rose-800 underline block cursor-pointer"
+          {/* Messages List */}
+          <div className="space-y-3">
+            {chatMessages.map((msg) => {
+              const isAssistant = msg.role === 'assistant';
+
+              return (
+                <div
+                  key={msg.id}
+                  className={`space-y-1 ${
+                    isAssistant ? 'w-full' : 'flex flex-col items-end pl-8'
+                  }`}
                 >
-                  Configure AI Providers in Settings →
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="bg-slate-50/70 p-3 rounded-lg border border-slate-200 max-h-80 overflow-y-auto text-[11px] text-slate-800 leading-relaxed font-sans whitespace-pre-wrap">
-              {generationResult.text}
+                  {/* Message Header */}
+                  <div className="flex items-center space-x-1.5 text-[10px] text-slate-400 px-1">
+                    {isAssistant ? (
+                      <>
+                        <Bot className="w-3 h-3 text-indigo-600" />
+                        <span className="font-bold text-slate-700">ForceLens Copilot</span>
+                        {msg.modelUsed && (
+                          <span className="font-mono text-[9px] bg-slate-200/70 text-slate-700 px-1.5 py-0.2 rounded font-medium">
+                            {msg.modelUsed}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <User className="w-3 h-3 text-blue-600" />
+                        <span className="font-bold text-slate-700">You</span>
+                      </>
+                    )}
+                    <span>• {msg.timestamp}</span>
+                  </div>
+
+                  {/* Message Body */}
+                  {isAssistant ? (
+                    <div className="space-y-2 relative group">
+                      <div className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => handleCopyMessage(msg.id, msg.content)}
+                          className="p-1 bg-white/90 hover:bg-white text-slate-600 border border-slate-200 rounded shadow-xs text-[10px] flex items-center cursor-pointer"
+                          title="Copy response"
+                        >
+                          {copiedMessageId === msg.id ? (
+                            <Check className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Render Rich Cards / Scorecards / Markdown */}
+                      <RichAiResponseView content={msg.content} />
+                    </div>
+                  ) : (
+                    <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-2.5 rounded-xl rounded-tr-none text-xs leading-relaxed max-w-[85%] shadow-xs">
+                      {msg.content}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Thinking / Loader Indicator */}
+            {isGenerating && (
+              <div className="flex items-center space-x-2 p-2.5 bg-indigo-50/60 border border-indigo-100 rounded-lg text-indigo-900 text-xs animate-pulse">
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
+                <span className="font-medium text-[11px]">
+                  ForceLens Copilot is analyzing Salesforce security rules and drafting remediation...
+                </span>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Quick Suggestion Chips */}
+          {!isGenerating && (
+            <div className="space-y-1.5 pt-2 border-t border-slate-200">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center">
+                <HelpCircle className="w-3 h-3 mr-1 text-indigo-500" />
+                Quick Follow-Up Questions:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {quickSuggestionPrompts.map((q, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleSendFollowUp(q)}
+                    disabled={isGenerating}
+                    className="text-left text-[11px] bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-900 border border-slate-200 px-2.5 py-1 rounded-lg transition-colors shadow-2xs cursor-pointer"
+                  >
+                    💡 {q}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
+
+          {/* Interactive Chat Input Bar */}
+          <div className="pt-2">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendFollowUp();
+              }}
+              className="flex items-center space-x-1.5"
+            >
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="Ask a follow-up question (e.g. 'How do I grant access via a Permission Set?')..."
+                disabled={isGenerating}
+                className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 disabled:opacity-60"
+              />
+              <button
+                type="submit"
+                disabled={!inputText.trim() || isGenerating}
+                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs shrink-0"
+                title="Send message"
+              >
+                {isGenerating ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+              </button>
+            </form>
+          </div>
         </div>
       )}
 

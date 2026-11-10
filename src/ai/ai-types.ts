@@ -32,3 +32,12 @@ export interface AiGenerationResult {
   modelUsed?: string;
   error?: string;
 }
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: string;
+  modelUsed?: string;
+  isInitialVerdict?: boolean;
+}
