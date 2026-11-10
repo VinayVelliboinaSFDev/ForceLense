@@ -114,6 +114,8 @@ export interface AnalysisResult {
   recordName?: string;
   targetUserId: string;
   targetUserName: string;
+  targetUserProfileName?: string;
+  targetUserRoleName?: string;
   startedAt: string;
   completedAt?: string;
   recordAccess?: RecordAccessFlags;

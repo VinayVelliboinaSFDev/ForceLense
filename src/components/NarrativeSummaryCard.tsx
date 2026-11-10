@@ -392,7 +392,7 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
                       key={prof}
                       className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200 font-medium text-[10px]"
                     >
-                      Profile: {prof}
+                      Profile: {prof.replace(/^Profile:\s*/i, '')}
                     </span>
                   ))}
                   {narrative.attribution.permissionSets.map((ps) => (
@@ -400,7 +400,7 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
                       key={ps}
                       className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-medium text-[10px]"
                     >
-                      PermSet: {ps}
+                      PermSet: {ps.replace(/^(Permission Set|PermSet):\s*/i, '')}
                     </span>
                   ))}
                 </div>

@@ -115,6 +115,8 @@ export async function runFullAnalysis(options: RunAnalysisOptions): Promise<Anal
     recordName,
     targetUserId: targetUser.id,
     targetUserName: targetUser.name,
+    targetUserProfileName: targetUser.profileName,
+    targetUserRoleName: targetUser.userRoleName,
     startedAt,
     completedAt: new Date().toISOString(),
     recordAccess: recordAccessFlags,

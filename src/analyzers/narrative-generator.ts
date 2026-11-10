@@ -137,9 +137,18 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
   // 6. Extraction of Causal Groups, Roles, Sharing Settings, Profiles & Permission Sets
   const groupsSet = new Set<string>();
   const rolesSet = new Set<string>();
-  const profilesSet = new Set<string>();
+  const profileCandidatesSet = new Set<string>();
   const permissionSetsSet = new Set<string>();
   const sharingSettingsList: Array<{ table: string; rowCause: string; accessLevel: string; label?: string }> = [];
+  const seenSettings = new Set<string>();
+
+  const addSharingSetting = (table: string, rowCause: string, accessLevel: string, label?: string) => {
+    const key = `${table.toLowerCase()}__${rowCause.toLowerCase()}__${accessLevel.toLowerCase()}`;
+    if (!seenSettings.has(key)) {
+      seenSettings.add(key);
+      sharingSettingsList.push({ table, rowCause, accessLevel, label });
+    }
+  };
 
   for (const finding of sharingFindings) {
     if (finding.type === 'group') {
@@ -156,18 +165,19 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
             if (p.startsWith('Role:')) {
               rolesSet.add(p.replace(/^Role:\s*/, '').trim());
             } else if (!p.startsWith('005') && !p.startsWith('00G') && !p.startsWith('00E')) {
-              groupsSet.add(p.trim());
+              const cleanGrp = p.replace(/^(Group|Public Group):\s*/i, '').trim();
+              if (cleanGrp) groupsSet.add(cleanGrp);
             }
           }
         }
       }
 
-      sharingSettingsList.push({
-        table: finding.source ? finding.source.split(' ')[0] : `${objectApiName}Share`,
-        rowCause: finding.rowCause ? `Rule (${finding.rowCause})` : 'Sharing Rule',
-        accessLevel: finding.accessLevel,
-        label: finding.label,
-      });
+      addSharingSetting(
+        finding.source ? finding.source.split(' ')[0] : `${objectApiName}Share`,
+        finding.rowCause ? `Rule (${finding.rowCause})` : 'Sharing Rule',
+        finding.accessLevel,
+        finding.label
+      );
     } else if (finding.type === 'hierarchy') {
       if (finding.path && Array.isArray(finding.path)) {
         for (const p of finding.path) {
@@ -178,41 +188,66 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
       } else {
         rolesSet.add('UserRole Hierarchy Manager');
       }
-      sharingSettingsList.push({
-        table: 'UserRole Hierarchy',
-        rowCause: 'Manager Subordinate Inheritance',
-        accessLevel: finding.accessLevel,
-        label: finding.label,
-      });
+      addSharingSetting(
+        'UserRole Hierarchy',
+        'Manager Subordinate Inheritance',
+        finding.accessLevel,
+        finding.label
+      );
     } else if (finding.type === 'ownership') {
-      sharingSettingsList.push({
-        table: `${objectApiName}.OwnerId`,
-        rowCause: 'Record Ownership',
-        accessLevel: 'All',
-        label: finding.label,
-      });
+      addSharingSetting(
+        `${objectApiName}.OwnerId`,
+        'Record Ownership',
+        'All',
+        finding.label
+      );
     } else if (finding.type === 'share_row') {
-      sharingSettingsList.push({
-        table: finding.source,
-        rowCause: finding.rowCause || 'Manual',
-        accessLevel: finding.accessLevel,
-        label: finding.label,
-      });
+      addSharingSetting(
+        finding.source,
+        finding.rowCause || 'Manual',
+        finding.accessLevel,
+        finding.label
+      );
     } else if (finding.type === 'owd') {
-      sharingSettingsList.push({
-        table: 'EntityDefinition',
-        rowCause: 'Org-Wide Default',
-        accessLevel: finding.accessLevel,
-        label: finding.label,
-      });
+      addSharingSetting(
+        'EntityDefinition',
+        'Org-Wide Default',
+        finding.accessLevel,
+        finding.label
+      );
     }
   }
 
-  // Inspect evidence details for additional roles or grant sources
+  // Helper to process source tokens (handles comma-separated sources)
+  const processSourceToken = (rawToken: string) => {
+    const token = rawToken.trim();
+    if (!token || token === 'Standard System Field' || token === 'Standard System Field Rules' || token === 'Restricted / Denied') {
+      return;
+    }
+    if (token.startsWith('Profile:')) {
+      const prof = token.replace(/^Profile:\s*/i, '').trim();
+      if (prof && !/^00e/i.test(prof) && !/^[a-zA-Z0-9]{15,18}$/.test(prof)) {
+        profileCandidatesSet.add(prof);
+      }
+    } else if (token.startsWith('Permission Set:') || token.startsWith('PSG:')) {
+      const ps = token.replace(/^(Permission Set|PSG):\s*/i, '').trim();
+      if (ps) permissionSetsSet.add(ps);
+    } else {
+      // If not marked as profile or perm set, check if it's a raw profile ID or valid perm set
+      if (/^00e/i.test(token) || /^[a-zA-Z0-9]{15,18}$/.test(token)) {
+        // Skip raw Salesforce ID
+      } else {
+        permissionSetsSet.add(token);
+      }
+    }
+  };
+
+  // Inspect evidence details for grant sources and role info
   for (const ev of result.evidence || []) {
     if (ev.details) {
-      if (typeof ev.details.ownerRoleName === 'string') rolesSet.add(ev.details.ownerRoleName);
-      if (typeof ev.details.targetRoleName === 'string') rolesSet.add(ev.details.targetRoleName);
+      if (typeof ev.details.targetRoleName === 'string' && ev.details.targetRoleName) {
+        rolesSet.add(ev.details.targetRoleName.trim());
+      }
       if (Array.isArray(ev.details.path)) {
         for (const p of ev.details.path) {
           if (typeof p === 'string' && p.startsWith('Role:')) {
@@ -223,14 +258,10 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
       if (ev.details.grantSources && typeof ev.details.grantSources === 'object') {
         const gs = ev.details.grantSources as Record<string, string[]>;
         for (const act of Object.keys(gs)) {
-          for (const src of gs[act] || []) {
-            if (typeof src === 'string') {
-              if (src.startsWith('Profile:')) {
-                profilesSet.add(src.replace(/^Profile:\s*/, '').trim());
-              } else if (src.startsWith('Permission Set:') || src.startsWith('PSG:')) {
-                permissionSetsSet.add(src.replace(/^(Permission Set|PSG):\s*/, '').trim());
-              } else if (src !== 'Standard System Field' && src !== 'Restricted / Denied') {
-                permissionSetsSet.add(src.trim());
+          for (const rawSrc of gs[act] || []) {
+            if (typeof rawSrc === 'string') {
+              for (const piece of rawSrc.split(',')) {
+                processSourceToken(piece);
               }
             }
           }
@@ -241,35 +272,34 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
 
   // Inspect field permissions for granting profiles and permission sets
   for (const f of fieldPermissions) {
-    if (f.source && f.source !== 'Standard System Field' && f.source !== 'Restricted / Denied') {
-      if (f.source.startsWith('Profile:')) {
-        profilesSet.add(f.source.replace(/^Profile:\s*/, '').trim());
-      } else if (f.source.startsWith('Permission Set:')) {
-        permissionSetsSet.add(f.source.replace(/^Permission Set:\s*/, '').trim());
-      } else {
-        permissionSetsSet.add(f.source.trim());
+    if (f.source) {
+      for (const piece of f.source.split(',')) {
+        processSourceToken(piece);
       }
     }
   }
 
-  const rawProfiles = Array.from(profilesSet);
-  const normalizedProfiles: string[] = [];
-  for (const p of rawProfiles) {
-    const isId = /^00e/i.test(p) || /^[a-zA-Z0-9]{15,18}$/.test(p);
-    if (isId) {
-      // Raw Salesforce Profile ID detected: replace with friendly User Profile indicator
-      const friendlyName = `${targetUserName}'s Profile`;
-      if (!normalizedProfiles.includes(friendlyName)) normalizedProfiles.push(friendlyName);
-    } else {
-      if (!normalizedProfiles.includes(p)) normalizedProfiles.push(p);
-    }
+  // Exactly ONE profile for one user in Salesforce
+  let singleProfileName: string | undefined = undefined;
+  if (result.targetUserProfileName && result.targetUserProfileName.trim()) {
+    singleProfileName = result.targetUserProfileName.replace(/^Profile:\s*/i, '').trim();
+  } else if (profileCandidatesSet.size > 0) {
+    // Pick the clean profile name candidate
+    singleProfileName = Array.from(profileCandidatesSet)[0];
+  } else {
+    singleProfileName = `${targetUserName}'s Profile`;
+  }
+
+  // Ensure user's primary role is included if known
+  if (result.targetUserRoleName && result.targetUserRoleName.trim()) {
+    rolesSet.add(result.targetUserRoleName.trim());
   }
 
   const attribution: CausalAccessAttribution = {
     groups: Array.from(groupsSet),
     roles: Array.from(rolesSet),
     sharingSettings: sharingSettingsList,
-    profiles: normalizedProfiles,
+    profiles: singleProfileName ? [singleProfileName] : [],
     permissionSets: Array.from(permissionSetsSet),
   };
 

@@ -265,6 +265,8 @@ export const SidePanelApp: React.FC = () => {
           ...MOCK_ANALYSIS_RESULT,
           targetUserId: targetB.id,
           targetUserName: targetB.name,
+          targetUserProfileName: targetB.profileName,
+          targetUserRoleName: targetB.userRoleName,
           recordAccess: recAccess,
           objectPermissions: objPerm,
           sharingFindings: sharingFinds,

@@ -62,6 +62,8 @@ export const MOCK_ANALYSIS_RESULT: AnalysisResult = {
   recordName: 'High Priority: Performance degradation on Enterprise API',
   targetUserId: '0057Q000000AlexDev',
   targetUserName: 'Alex Rivera',
+  targetUserProfileName: 'Standard Support Agent',
+  targetUserRoleName: 'Tier 1 Support Specialist',
   startedAt: new Date(Date.now() - 3200).toISOString(),
   completedAt: new Date().toISOString(),
   recordAccess: {

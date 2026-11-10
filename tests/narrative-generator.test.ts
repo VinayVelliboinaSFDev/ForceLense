@@ -36,6 +36,7 @@ describe('Narrative Summary Generator', () => {
     expect(ruleShare?.accessLevel).toBe('Read');
 
     // Causal Profiles & Permission Sets
+    expect(narrative.attribution.profiles.length).toBe(1);
     expect(narrative.attribution.profiles).toContain('Standard Support Agent');
     expect(narrative.attribution.permissionSets).toContain('Tier 1 Escalations Read Only');
 
@@ -51,6 +52,7 @@ describe('Narrative Summary Generator', () => {
     const rawIdMock: AnalysisResult = {
       ...MOCK_ANALYSIS_RESULT,
       targetUserName: 'Melissa King',
+      targetUserProfileName: undefined,
       fieldPermissions: [
         {
           fieldApiName: 'Account.Name',
@@ -66,6 +68,36 @@ describe('Narrative Summary Generator', () => {
     // Must NOT contain the raw 00e ID
     expect(narrative.attribution.profiles).not.toContain('00e5g0000012345AAA');
     expect(narrative.attribution.profiles).toContain("Melissa King's Profile");
+    expect(narrative.attribution.profiles.length).toBe(1);
+  });
+
+  it('guarantees only one profile is displayed even if multiple field/evidence citations exist', () => {
+    const multiProfileMock: AnalysisResult = {
+      ...MOCK_ANALYSIS_RESULT,
+      targetUserName: 'John Doe',
+      targetUserProfileName: 'Custom Sales Profile',
+      fieldPermissions: [
+        {
+          fieldApiName: 'Opportunity.Name',
+          label: 'Name',
+          readable: true,
+          editable: true,
+          source: 'Profile: Custom Sales Profile, Permission Set: Sales Deal Closer',
+        },
+        {
+          fieldApiName: 'Opportunity.StageName',
+          label: 'Stage',
+          readable: true,
+          editable: true,
+          source: 'Profile: 00e5g0000099999AAA',
+        },
+      ],
+    };
+
+    const narrative = generateNarrativeSummary(multiProfileMock);
+    expect(narrative.attribution.profiles.length).toBe(1);
+    expect(narrative.attribution.profiles[0]).toBe('Custom Sales Profile');
+    expect(narrative.attribution.permissionSets).toContain('Sales Deal Closer');
   });
 
   it('generates granted headline and owner fact when user has Read and Edit access as owner', () => {
