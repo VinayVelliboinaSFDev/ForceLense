@@ -123,6 +123,27 @@ export class SalesforceApiClient {
     );
   }
 
+  private profileCache = new Map<string, string>();
+
+  public async getProfileName(profileId: string): Promise<string> {
+    if (!profileId) return 'Unknown Profile';
+    if (this.profileCache.has(profileId)) {
+      return this.profileCache.get(profileId)!;
+    }
+    try {
+      const records = await this.query<{ Id: string; Name: string }>(
+        `SELECT Id, Name FROM Profile WHERE Id = '${profileId}' LIMIT 1`
+      );
+      if (records && records.length > 0 && records[0].Name) {
+        this.profileCache.set(profileId, records[0].Name);
+        return records[0].Name;
+      }
+    } catch {
+      // fallback
+    }
+    return profileId;
+  }
+
   public async searchUsers(searchTerm: string): Promise<TargetUser[]> {
     const cleanTerm = searchTerm.trim().replace(/'/g, "\\'");
     if (!cleanTerm) return [];

@@ -409,40 +409,7 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
           </div>
         </div>
 
-        {/* 6. Permission Discrepancy & Blocker Callout (if any) */}
-        {narrative.blockerFact && (
-          <div className="p-2.5 bg-amber-50/90 border border-amber-200 rounded-lg flex items-start space-x-2 text-[11px] text-amber-900 shadow-2xs">
-            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <div>
-              <strong className="block font-semibold">Permission Discrepancy / Blocker:</strong>
-              <p className="mt-0.5 leading-relaxed">{narrative.blockerFact}</p>
-            </div>
-          </div>
-        )}
-
-        {/* 7. Restricted FLS Field Pills (if any restricted fields) */}
-        {restrictedFields.length > 0 && (
-          <div className="p-2 rounded-lg bg-rose-50/70 border border-rose-200 flex items-start space-x-2 text-[10px] text-rose-900">
-            <Lock className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-bold block">
-                Restricted Fields ({restrictedFields.length} hidden from {result.targetUserName}):
-              </span>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {restrictedFields.map((f) => (
-                  <span
-                    key={f.fieldApiName}
-                    className="px-1.5 py-0.5 bg-white border border-rose-200 text-rose-800 rounded font-mono font-medium"
-                  >
-                    {f.label || f.fieldApiName}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 8. Action Link to AI Explainer */}
+        {/* Action Link to AI Explainer */}
         {onOpenAiTab && (
           <div className="pt-1 border-t border-slate-100">
             <button

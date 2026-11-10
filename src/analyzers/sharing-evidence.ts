@@ -496,6 +496,17 @@ export async function analyzeSharingEvidence(
           source: 'EntityDefinition',
           retrievedAt: new Date().toISOString(),
         });
+
+        // Deep Traversal: inspect parent record sharing
+        try {
+          const parentTraversal = await traverseParentSharing(objectApiName, recordId, targetUser.id);
+          if (parentTraversal && parentTraversal.parentFinding && parentTraversal.parentEvidence) {
+            findings.push(parentTraversal.parentFinding);
+            evidence.push(parentTraversal.parentEvidence);
+          }
+        } catch {
+          // Soft fail parent traversal
+        }
       }
     } else {
       evidence.push({
@@ -535,6 +546,139 @@ export async function analyzeSharingEvidence(
   });
 
   return { findings, evidence, warnings, ownerId, recordName };
+}
+
+/**
+ * Known parent relationship mappings for common standard master-detail / controlled child objects
+ */
+export const CONTROLLED_CHILD_MAP: Record<string, { parentObject: string; foreignKey: string }> = {
+  OpportunityLineItem: { parentObject: 'Opportunity', foreignKey: 'OpportunityId' },
+  CaseComment: { parentObject: 'Case', foreignKey: 'ParentId' },
+  AccountContactRole: { parentObject: 'Account', foreignKey: 'AccountId' },
+  OpportunityContactRole: { parentObject: 'Opportunity', foreignKey: 'OpportunityId' },
+  CampaignMember: { parentObject: 'Campaign', foreignKey: 'CampaignId' },
+  OrderItem: { parentObject: 'Order', foreignKey: 'OrderId' },
+  QuoteLineItem: { parentObject: 'Quote', foreignKey: 'QuoteId' },
+};
+
+/**
+ * Deep Traversal for ControlledByParent child records:
+ * Resolves the parent record ID and inspects parent share table access for target user.
+ */
+export async function traverseParentSharing(
+  childObjectApiName: string,
+  childRecordId: string,
+  targetUserId: string
+): Promise<{
+  parentObject: string;
+  parentId: string;
+  parentFinding?: SharingFinding;
+  parentEvidence?: EvidenceItem;
+} | null> {
+  try {
+    let parentObject = '';
+    let fkField = '';
+
+    const known = CONTROLLED_CHILD_MAP[childObjectApiName];
+    if (known) {
+      parentObject = known.parentObject;
+      fkField = known.foreignKey;
+    } else {
+      const describe = await sfApi.describeSObject(childObjectApiName);
+      if (describe && describe.fields) {
+        const mdField =
+          describe.fields.find(
+            (f) =>
+              (f.relationshipOrder !== undefined || f.cascadeDelete) &&
+              f.referenceTo &&
+              f.referenceTo.length > 0
+          ) ||
+          describe.fields.find(
+            (f) => f.name.toLowerCase() === 'parentid' && f.referenceTo && f.referenceTo.length > 0
+          );
+
+        if (mdField && mdField.referenceTo && mdField.referenceTo[0]) {
+          parentObject = mdField.referenceTo[0];
+          fkField = mdField.name;
+        }
+      }
+    }
+
+    if (!parentObject || !fkField) return null;
+
+    const childRec = await sfApi.query<Record<string, unknown>>(
+      `SELECT Id, ${fkField} FROM ${childObjectApiName} WHERE Id = '${childRecordId}' LIMIT 1`
+    );
+    if (!childRec || childRec.length === 0 || !childRec[0][fkField]) return null;
+
+    const parentId = String(childRec[0][fkField]);
+    const parentSchema = await resolveShareTableSchema(parentObject);
+    let parentAccessLevel = 'Inherited';
+    let rowCause = 'Parent Master-Detail Rule';
+
+    if (parentSchema) {
+      try {
+        const parentShareQuery = `
+          SELECT Id, ${parentSchema.fkField}, UserOrGroupId, ${parentSchema.accessLevelField}${
+          parentSchema.hasRowCause ? ', RowCause' : ''
+        }
+          FROM ${parentSchema.shareTable}
+          WHERE ${parentSchema.fkField} = '${parentId}'
+            AND (UserOrGroupId = '${targetUserId}' OR UserOrGroupId IN (SELECT GroupId FROM GroupMember WHERE UserOrGroupId = '${targetUserId}'))
+          LIMIT 5
+        `;
+        const pRows = await sfApi.query<ShareRecord>(parentShareQuery);
+        if (pRows && pRows.length > 0) {
+          parentAccessLevel = String(
+            pRows[0][parentSchema.accessLevelField] || pRows[0].AccessLevel || 'Read'
+          );
+          rowCause = pRows[0].RowCause || 'Parent Share Rule';
+        }
+      } catch {
+        // Soft fail parent share row query
+      }
+    }
+
+    const parentFinding: SharingFinding = {
+      type: 'special',
+      label: `Master-Detail Inheritance from ${parentObject}`,
+      accessLevel: parentAccessLevel,
+      rowCause,
+      source: `${parentObject}Share -> ${childObjectApiName}`,
+      path: [
+        `Child: ${childObjectApiName} (${childRecordId})`,
+        `Parent: ${parentObject} (${parentId})`,
+      ],
+      status: 'confirmed',
+    };
+
+    const parentEvidence: EvidenceItem = {
+      id: `share-parent-${childRecordId}`,
+      category: 'sharing',
+      status: 'confirmed',
+      title: `Master-Detail Deep Traversal: Parent ${parentObject}`,
+      explanation: `${childObjectApiName} is ControlledByParent. Traversed foreign key ${fkField} to parent ${parentObject} (${parentId}). Parent sharing confirms access level: ${parentAccessLevel}.`,
+      source: `${parentObject}Share`,
+      retrievedAt: new Date().toISOString(),
+      targetUserId,
+      recordId: childRecordId,
+      details: {
+        parentObject,
+        parentId,
+        foreignKeyField: fkField,
+        parentAccessLevel,
+      },
+    };
+
+    return {
+      parentObject,
+      parentId,
+      parentFinding,
+      parentEvidence,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

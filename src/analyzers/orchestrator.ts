@@ -86,7 +86,9 @@ export async function runFullAnalysis(options: RunAnalysisOptions): Promise<Anal
     const fieldRes = await analyzeFieldPermissions(
       targetUser.id,
       objectApiName,
-      permissionSetIds
+      permissionSetIds,
+      undefined,
+      targetUser.profileName
     );
     fieldPermissions = fieldRes.fields;
     allEvidence.push(...fieldRes.evidence);

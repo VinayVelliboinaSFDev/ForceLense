@@ -47,6 +47,27 @@ describe('Narrative Summary Generator', () => {
     expect(narrative.breadcrumbNodes.some((n) => n.type === 'verdict' && n.label.includes('Read'))).toBe(true);
   });
 
+  it('normalizes raw profile IDs into friendly profile names and never displays raw IDs', () => {
+    const rawIdMock: AnalysisResult = {
+      ...MOCK_ANALYSIS_RESULT,
+      targetUserName: 'Melissa King',
+      fieldPermissions: [
+        {
+          fieldApiName: 'Account.Name',
+          label: 'Account Name',
+          readable: true,
+          editable: true,
+          source: 'Profile: 00e5g0000012345AAA',
+        },
+      ],
+    };
+
+    const narrative = generateNarrativeSummary(rawIdMock);
+    // Must NOT contain the raw 00e ID
+    expect(narrative.attribution.profiles).not.toContain('00e5g0000012345AAA');
+    expect(narrative.attribution.profiles).toContain("Melissa King's Profile");
+  });
+
   it('generates granted headline and owner fact when user has Read and Edit access as owner', () => {
     const fullAccessMock: AnalysisResult = {
       ...MOCK_ANALYSIS_RESULT,

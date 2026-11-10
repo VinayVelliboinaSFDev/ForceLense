@@ -12,7 +12,8 @@ export async function analyzeFieldPermissions(
   targetUserId: string,
   objectApiName: string,
   permissionSetIds: string[],
-  describe?: SObjectDescribe
+  describe?: SObjectDescribe,
+  targetProfileName?: string
 ): Promise<FieldPermissionsAnalyzerResult> {
   const evidence: EvidenceItem[] = [];
   const warnings: string[] = [];
@@ -68,7 +69,10 @@ export async function analyzeFieldPermissions(
         const fieldName = (parts.length > 1 ? parts[1] : parts[0]).toLowerCase();
 
         const current = flsMap.get(fieldName) || { readable: false, editable: false, sources: [] };
-        const parentLabel = row.Parent?.Label || row.Parent?.Name || 'Permission Set';
+        let parentLabel = row.Parent?.Label || row.Parent?.Name || 'Permission Set';
+        if ((/^00e/i.test(parentLabel) || /^[a-zA-Z0-9]{15,18}$/.test(parentLabel)) && targetProfileName) {
+          parentLabel = `Profile: ${targetProfileName}`;
+        }
 
         if (row.PermissionsRead) {
           current.readable = true;

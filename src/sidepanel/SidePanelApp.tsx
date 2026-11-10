@@ -9,6 +9,7 @@ import { AiExplainerTab } from '../components/AiExplainerTab';
 import { EvidenceCard } from '../components/EvidenceCard';
 import { FieldPermissionsTable } from '../components/FieldPermissionsTable';
 import { SharingEvidenceList } from '../components/SharingEvidenceList';
+import { UserDiffView } from '../components/UserDiffView';
 import { DiagnosticModal } from '../components/DiagnosticModal';
 import { SettingsModal } from '../components/SettingsModal';
 import { ConnectModal } from '../components/ConnectModal';
@@ -29,6 +30,7 @@ import { getOrgConnection, disconnectSession } from '../auth/token-store';
 import { initiateOAuthFlow } from '../auth/oauth';
 import { autoDetectSalesforceSession } from '../auth/salesforce-session';
 import { runFullAnalysis } from '../analyzers/orchestrator';
+import { sfApi } from '../salesforce/api-client';
 import {
   Play,
   Loader2,
@@ -40,6 +42,7 @@ import {
   AlertCircle,
   FileSearch,
   Sparkles,
+  GitCompare,
 } from 'lucide-react';
 
 export const SidePanelApp: React.FC = () => {
@@ -51,7 +54,13 @@ export const SidePanelApp: React.FC = () => {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // Tabs (Visual Summary is prominently hosted at the top, tabs explore deeper drilldowns)
-  const [activeTab, setActiveTab] = useState<'ai' | 'fields' | 'sharing' | 'evidence' | 'limitations'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'diff' | 'fields' | 'sharing' | 'evidence' | 'limitations'>('ai');
+
+  // User Diff Mode State
+  const [userB, setUserB] = useState<TargetUser | null>(null);
+  const [resultB, setResultB] = useState<AnalysisResult | null>(null);
+  const [isLoadingB, setIsLoadingB] = useState(false);
+  const [candidateUsers, setCandidateUsers] = useState<TargetUser[]>(MOCK_TARGET_USERS);
 
   // Modals
   const [isConnectOpen, setIsConnectOpen] = useState(false);
@@ -188,6 +197,64 @@ export const SidePanelApp: React.FC = () => {
     }
   };
 
+  const handleSelectUserB = async (targetB: TargetUser) => {
+    setUserB(targetB);
+    if (!recordContext) return;
+    setIsLoadingB(true);
+    try {
+      if (isMockMode) {
+        const mockDiff: AnalysisResult = {
+          ...MOCK_ANALYSIS_RESULT,
+          targetUserId: targetB.id,
+          targetUserName: targetB.name,
+          recordAccess: {
+            read: true,
+            edit: true,
+            delete: true,
+            maxAccessLevel: 'All',
+          },
+          objectPermissions: {
+            read: true,
+            create: true,
+            edit: true,
+            delete: true,
+            viewAll: true,
+            modifyAll: true,
+          },
+          sharingFindings: [
+            {
+              type: 'ownership',
+              label: `Direct Record Owner (${targetB.name})`,
+              accessLevel: 'All',
+              rowCause: 'Owner',
+              source: 'Case.OwnerId',
+              status: 'confirmed',
+            },
+          ],
+          fieldPermissions: MOCK_ANALYSIS_RESULT.fieldPermissions.map((f) => ({
+            ...f,
+            readable: true,
+            editable: true,
+            source: `Profile: ${targetB.profileName}`,
+          })),
+        };
+        setResultB(mockDiff);
+      } else if (connection) {
+        const resB = await runFullAnalysis({
+          orgId: connection.orgId,
+          recordId: recordContext.recordId,
+          objectApiName: recordContext.objectApiName,
+          targetUser: targetB,
+        });
+        setResultB(resB);
+      }
+    } catch (err) {
+      console.error('Failed to analyze User B:', err);
+    } finally {
+      setIsLoadingB(false);
+    }
+  };
+
   return (
     <div className="h-screen w-screen flex flex-col bg-slate-100 overflow-hidden text-slate-800">
       {/* Top Header */}
@@ -279,6 +346,18 @@ export const SidePanelApp: React.FC = () => {
               </button>
 
               <button
+                onClick={() => setActiveTab('diff')}
+                className={`px-2.5 py-2 font-bold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
+                  activeTab === 'diff'
+                    ? 'border-purple-600 text-purple-700 bg-purple-50/50 rounded-t-md'
+                    : 'border-transparent text-purple-600 hover:text-purple-800'
+                }`}
+              >
+                <GitCompare className="w-3.5 h-3.5 mr-1" />
+                Diff Mode
+              </button>
+
+              <button
                 onClick={() => setActiveTab('fields')}
                 className={`px-2.5 py-2 font-semibold border-b-2 transition-all flex items-center whitespace-nowrap shrink-0 ${
                   activeTab === 'fields'
@@ -330,6 +409,18 @@ export const SidePanelApp: React.FC = () => {
             {/* Tab Panels */}
             {activeTab === 'ai' && (
               <AiExplainerTab result={analysisResult} />
+            )}
+
+            {activeTab === 'diff' && selectedUser && (
+              <UserDiffView
+                userA={selectedUser}
+                resultA={analysisResult}
+                userB={userB}
+                resultB={resultB}
+                candidateUsers={isMockMode ? MOCK_TARGET_USERS : candidateUsers}
+                onSelectUserB={handleSelectUserB}
+                isLoadingB={isLoadingB}
+              />
             )}
 
             {activeTab === 'fields' && (

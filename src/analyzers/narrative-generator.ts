@@ -252,11 +252,24 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
     }
   }
 
+  const rawProfiles = Array.from(profilesSet);
+  const normalizedProfiles: string[] = [];
+  for (const p of rawProfiles) {
+    const isId = /^00e/i.test(p) || /^[a-zA-Z0-9]{15,18}$/.test(p);
+    if (isId) {
+      // Raw Salesforce Profile ID detected: replace with friendly User Profile indicator
+      const friendlyName = `${targetUserName}'s Profile`;
+      if (!normalizedProfiles.includes(friendlyName)) normalizedProfiles.push(friendlyName);
+    } else {
+      if (!normalizedProfiles.includes(p)) normalizedProfiles.push(p);
+    }
+  }
+
   const attribution: CausalAccessAttribution = {
     groups: Array.from(groupsSet),
     roles: Array.from(rolesSet),
     sharingSettings: sharingSettingsList,
-    profiles: Array.from(profilesSet),
+    profiles: normalizedProfiles,
     permissionSets: Array.from(permissionSetsSet),
   };
 

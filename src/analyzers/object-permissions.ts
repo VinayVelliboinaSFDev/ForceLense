@@ -61,9 +61,18 @@ export async function analyzeObjectPermissions(
 
     for (const a of assignments) {
       if (a.PermissionSetId) {
+        let label = a.PermissionSet?.Label || a.PermissionSet?.Name || 'Permission Set';
+        const isProfile = !!a.PermissionSet?.IsOwnedByProfile;
+        if (isProfile) {
+          if (targetUser.profileName) {
+            label = `Profile: ${targetUser.profileName}`;
+          } else if (!label.startsWith('Profile:') && !label.startsWith('00e')) {
+            label = `Profile: ${label}`;
+          }
+        }
         permSetIdMap.set(a.PermissionSetId, {
-          label: a.PermissionSet?.Label || a.PermissionSet?.Name || 'Permission Set',
-          isProfile: !!a.PermissionSet?.IsOwnedByProfile,
+          label,
+          isProfile,
           groupId: a.PermissionSetGroupId,
           viewAllData: !!a.PermissionSet?.PermissionsViewAllData,
           modifyAllData: !!a.PermissionSet?.PermissionsModifyAllData,
@@ -159,7 +168,10 @@ export async function analyzeObjectPermissions(
     const objPermRows = await sfApi.query<ObjectPermissionsRecord>(objPermSoql);
 
     for (const row of objPermRows) {
-      const parentLabel = row.Parent?.Label || permSetIdMap.get(row.ParentId)?.label || 'Permission Set';
+      let parentLabel = permSetIdMap.get(row.ParentId)?.label || row.Parent?.Label || row.Parent?.Name || 'Permission Set';
+      if ((row.Parent?.IsOwnedByProfile || /^00e/i.test(parentLabel)) && targetUser.profileName) {
+        parentLabel = `Profile: ${targetUser.profileName}`;
+      }
 
       if (row.PermissionsRead) {
         permissions.read = true;

@@ -13,6 +13,9 @@ export interface FieldDescribe {
   updateable: boolean;
   nillable: boolean;
   permissionable: boolean;
+  referenceTo?: string[];
+  relationshipOrder?: number;
+  cascadeDelete?: boolean;
 }
 
 export interface SObjectDescribe {
