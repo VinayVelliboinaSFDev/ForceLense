@@ -458,7 +458,10 @@ export const SidePanelApp: React.FC = () => {
 
             {/* Tab Panels */}
             {activeTab === 'ai' && (
-              <AiExplainerTab result={analysisResult} />
+              <AiExplainerTab
+                result={analysisResult}
+                onOpenSettings={() => setIsSettingsOpen(true)}
+              />
             )}
 
             {activeTab === 'diff' && selectedUser && (

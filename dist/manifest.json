@@ -15,7 +15,12 @@
     "https://*.salesforce.com/*",
     "https://*.force.com/*",
     "https://*.my.salesforce.com/*",
-    "https://*.lightning.force.com/*"
+    "https://*.lightning.force.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://generativelanguage.googleapis.com/*"
   ],
   "background": {
     "service_worker": "background.js",
