@@ -18,6 +18,7 @@ import {
   GitFork,
   FileCheck2,
   Layers,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { AnalysisResult } from '../types';
 import { generateNarrativeSummary } from '../analyzers/narrative-generator';
@@ -35,11 +36,47 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
   const canRead = result.recordAccess?.read === true;
   const canEdit = result.recordAccess?.edit === true;
   const canDelete = result.recordAccess?.delete === true;
+  const canTransfer = result.recordAccess?.transfer === true;
 
-  const totalFields = result.fieldPermissions.length;
-  const readableCount = result.fieldPermissions.filter((f) => f.readable === true).length;
-  const editableCount = result.fieldPermissions.filter((f) => f.editable === true).length;
-  const restrictedFields = result.fieldPermissions.filter((f) => f.readable === false);
+  const isDirectOwner = result.sharingFindings.some(
+    (f) => f.type === 'ownership' && (f.label === 'Direct Record Owner' || f.label.includes(result.targetUserName))
+  );
+  const directShare = result.sharingFindings.find((f) => f.type === 'share_row');
+  const groupShare = result.sharingFindings.find((f) => f.type === 'group');
+  const hierarchyShare = result.sharingFindings.find((f) => f.type === 'hierarchy');
+  const shareFinding = directShare || groupShare || hierarchyShare;
+
+  const readOrigin = isDirectOwner
+    ? 'Direct Record Owner'
+    : directShare
+    ? `Share Row (${directShare.rowCause || 'Manual'})`
+    : groupShare
+    ? `Group (${groupShare.rowCause || 'Rule'})`
+    : hierarchyShare
+    ? 'Role Hierarchy'
+    : 'Baseline OWD Visibility';
+
+  const editOrigin = canEdit
+    ? isDirectOwner
+      ? 'Record Owner'
+      : shareFinding
+      ? `Share Row (${shareFinding.rowCause || 'Rule'})`
+      : 'Read/Write OWD'
+    : result.objectPermissions.edit
+    ? 'Missing Write Share'
+    : 'Profile CRUD: No Edit';
+
+  const deleteOrigin = canDelete
+    ? isDirectOwner
+      ? 'Record Owner'
+      : 'Delete Granted'
+    : result.objectPermissions.delete
+    ? 'Owner/Share Required'
+    : 'Profile CRUD: No Delete';
+
+  const transferOrigin = canTransfer
+    ? 'Can Transfer Owner'
+    : 'Transfer Blocked';
 
   const getBadge = () => {
     switch (narrative.badgeType) {
@@ -105,9 +142,14 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
               <Shield className="w-3.5 h-3.5 text-blue-600 mr-1.5" />
               Executive Access Scorecard
             </span>
-            <span className="text-[10px] text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded">
-              Max Level: {result.recordAccess?.maxAccessLevel || 'Unknown'}
-            </span>
+            <div className="flex items-center space-x-1.5 text-[10px]">
+              <span className="text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded">
+                Share Rows: {result.sharingFindings.length} verified
+              </span>
+              <span className="text-blue-700 font-mono bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded font-bold">
+                Max: {result.recordAccess?.maxAccessLevel || 'Unknown'}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-4 gap-2 text-center">
@@ -130,8 +172,8 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
               >
                 {canRead ? 'GRANTED' : 'DENIED'}
               </span>
-              <span className="block text-[9px] text-slate-500 mt-1 font-medium">
-                {canRead ? 'Can View Record' : 'No View Grant'}
+              <span className="block text-[9px] text-slate-500 mt-1 font-medium truncate" title={readOrigin}>
+                {readOrigin}
               </span>
             </div>
 
@@ -154,8 +196,8 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
               >
                 {canEdit ? 'GRANTED' : 'DENIED'}
               </span>
-              <span className="block text-[9px] text-slate-500 mt-1 font-medium">
-                {canEdit ? 'Can Edit Record' : 'Edit Blocked'}
+              <span className="block text-[9px] text-slate-500 mt-1 font-medium truncate" title={editOrigin}>
+                {editOrigin}
               </span>
             </div>
 
@@ -178,22 +220,32 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
               >
                 {canDelete ? 'GRANTED' : 'DENIED'}
               </span>
-              <span className="block text-[9px] text-slate-500 mt-1 font-medium">
-                {canDelete ? 'Can Delete' : 'Delete Blocked'}
+              <span className="block text-[9px] text-slate-500 mt-1 font-medium truncate" title={deleteOrigin}>
+                {deleteOrigin}
               </span>
             </div>
 
-            {/* FLS Security Tile */}
-            <div className="p-2 rounded-lg border bg-amber-50/70 border-amber-200 text-amber-950">
+            {/* Record Transfer Tile */}
+            <div
+              className={`p-2 rounded-lg border transition-all ${
+                canTransfer
+                  ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                  : 'bg-rose-50/70 border-rose-200 text-rose-950'
+              }`}
+            >
               <div className="flex items-center justify-center space-x-1 mb-1">
-                <Lock className="w-3.5 h-3.5 text-amber-600" />
-                <span className="font-bold text-[11px]">Field (FLS)</span>
+                <ArrowLeftRight className={`w-3.5 h-3.5 ${canTransfer ? 'text-emerald-600' : 'text-rose-500'}`} />
+                <span className="font-bold text-[11px]">Record Transfer</span>
               </div>
-              <span className="inline-block text-[10px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider bg-amber-200 text-amber-900">
-                {restrictedFields.length === 0 ? 'FULL' : 'PARTIAL'}
+              <span
+                className={`inline-block text-[10px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                  canTransfer ? 'bg-emerald-200 text-emerald-900' : 'bg-rose-200 text-rose-900'
+                }`}
+              >
+                {canTransfer ? 'GRANTED' : 'DENIED'}
               </span>
-              <span className="block text-[9px] text-slate-500 mt-1 font-medium">
-                {readableCount}/{totalFields} Readable
+              <span className="block text-[9px] text-slate-500 mt-1 font-medium truncate" title={transferOrigin}>
+                {transferOrigin}
               </span>
             </div>
           </div>
