@@ -10,6 +10,22 @@ export interface SharingEvidenceAnalyzerResult {
   recordName?: string;
 }
 
+export interface GroupMembershipTarget {
+  id: string;
+  name: string;
+  userRoleId?: string;
+  userRoleName?: string;
+}
+
+export interface ResolvedGroupMembership {
+  id: string;
+  name: string;
+  type: string;
+  isMember: boolean;
+  path: string[];
+  relatedId?: string;
+}
+
 export interface ResolvedShareTableSchema {
   shareTable: string;
   fkField: string;
@@ -164,6 +180,22 @@ export async function analyzeSharingEvidence(
   const evidence: EvidenceItem[] = [];
   const warnings: string[] = [];
 
+  // Resilient fallback to fetch UserRoleId if not pre-populated
+  if (!targetUser.userRoleId) {
+    try {
+      const userRec = await sfApi.getUserById(targetUser.id);
+      if (userRec?.userRoleId) {
+        targetUser = {
+          ...targetUser,
+          userRoleId: userRec.userRoleId,
+          userRoleName: userRec.userRoleName || targetUser.userRoleName,
+        };
+      }
+    } catch {
+      // Continue with provided targetUser
+    }
+  }
+
   let ownerId: string | undefined;
   let recordName: string | undefined;
 
@@ -202,13 +234,78 @@ export async function analyzeSharingEvidence(
           targetUserId: targetUser.id,
           recordId,
         });
+      } else if (ownerId.startsWith('00G')) {
+        // Record is owned by a Queue!
+        try {
+          const queueResolution = await resolveGroupMemberships([ownerId], targetUser);
+          const queueInfo = queueResolution.get(ownerId);
+          if (queueInfo && queueInfo.isMember) {
+            findings.push({
+              type: 'ownership',
+              label: `Queue Member: ${queueInfo.name}`,
+              accessLevel: 'Read/Write',
+              rowCause: 'QueueOwner',
+              path: queueInfo.path,
+              source: `${objectApiName}.OwnerId -> Queue Member`,
+              status: 'supported',
+              details: {
+                queueId: ownerId,
+                queueName: queueInfo.name,
+                path: queueInfo.path,
+              },
+            });
+
+            evidence.push({
+              id: `share-owner-queue-${recordId}`,
+              category: 'sharing',
+              status: 'supported',
+              title: `Queue Owner Member: ${queueInfo.name}`,
+              explanation: `Record is owned by Queue "${queueInfo.name}" (${ownerId}). Target user ${targetUser.name} is a member of this Queue via path: ${queueInfo.path.join(' -> ')}. Members of an owning queue receive record access.`,
+              source: `${objectApiName}.OwnerId & GroupMember`,
+              retrievedAt: new Date().toISOString(),
+              targetUserId: targetUser.id,
+              recordId,
+              details: {
+                queueId: ownerId,
+                queueName: queueInfo.name,
+                path: queueInfo.path,
+              },
+            });
+          } else {
+            const queueName = queueInfo?.name || ownerId;
+            evidence.push({
+              id: `share-owner-other-${recordId}`,
+              category: 'sharing',
+              status: 'confirmed',
+              title: 'Record Owned by Queue',
+              explanation: `Record is owned by Queue "${queueName}" (${ownerId}). Target user ${targetUser.name} is not a member of this Queue.`,
+              source: `${objectApiName}.OwnerId`,
+              retrievedAt: new Date().toISOString(),
+              targetUserId: targetUser.id,
+              recordId,
+              details: { queueId: ownerId, queueName },
+            });
+          }
+        } catch {
+          evidence.push({
+            id: `share-owner-other-${recordId}`,
+            category: 'sharing',
+            status: 'confirmed',
+            title: 'Record Owner Identified',
+            explanation: `Record is owned by Queue (${ownerId}). Target user is not the direct record owner.`,
+            source: `${objectApiName}.OwnerId`,
+            retrievedAt: new Date().toISOString(),
+            targetUserId: targetUser.id,
+            recordId,
+          });
+        }
       } else {
         evidence.push({
           id: `share-owner-other-${recordId}`,
           category: 'sharing',
           status: 'confirmed',
           title: 'Record Owner Identified',
-          explanation: `Record is owned by user/queue ID: ${ownerId}. Target user is not the record owner.`,
+          explanation: `Record is owned by user ID: ${ownerId}. Target user is not the record owner.`,
           source: `${objectApiName}.OwnerId`,
           retrievedAt: new Date().toISOString(),
           targetUserId: targetUser.id,
@@ -286,10 +383,10 @@ export async function analyzeSharingEvidence(
           });
         }
 
-        // Check Group / Role Shares
+        // Check Group / Role Shares (including Queues and Roles)
         if (candidateGroupIds.length > 0) {
           try {
-            const groupDetails = await resolveGroupMemberships(candidateGroupIds, targetUser.id);
+            const groupDetails = await resolveGroupMemberships(candidateGroupIds, targetUser);
 
             for (const row of shareRows) {
               const matchedGroup = groupDetails.get(row.UserOrGroupId);
@@ -303,28 +400,58 @@ export async function analyzeSharingEvidence(
                   rowCause,
                   accessLevelField: shareSchema.accessLevelField,
                   foreignKeyField: shareSchema.fkField,
+                  groupType: matchedGroup.type,
+                  groupName: matchedGroup.name,
+                  membershipPath: matchedGroup.path,
                 };
                 for (const relField of shareSchema.relatedAccessFields) {
                   if (row[relField]) extraDetails[relField] = row[relField];
                 }
 
+                // Determine precise finding type and human-readable label
+                let findingType: 'role' | 'group' = 'group';
+                let label = `Group Share: ${matchedGroup.name} (${rowCause})`;
+                let title = `Access via Group: ${matchedGroup.name}`;
+
+                if (
+                  matchedGroup.type === 'Role' ||
+                  matchedGroup.type === 'RoleAndSubordinates' ||
+                  matchedGroup.type === 'RoleAndSubordinatesInternal'
+                ) {
+                  findingType = 'role';
+                  const rolePrefix = matchedGroup.type.startsWith('RoleAndSubordinates')
+                    ? 'Role & Subordinates'
+                    : 'Role';
+                  label = `${rolePrefix} Share: ${matchedGroup.name} (${rowCause})`;
+                  title = `Access via ${rolePrefix}: ${matchedGroup.name}`;
+                } else if (matchedGroup.type === 'Queue') {
+                  findingType = 'group';
+                  label = `Queue Share: ${matchedGroup.name} (${rowCause})`;
+                  title = `Access via Queue: ${matchedGroup.name}`;
+                } else {
+                  findingType = 'group';
+                  label = `Public Group Share: ${matchedGroup.name} (${rowCause})`;
+                  title = `Access via Public Group: ${matchedGroup.name}`;
+                }
+
                 findings.push({
-                  type: 'group',
-                  label: `Public Group Share (${matchedGroup.name})`,
+                  type: findingType,
+                  label,
                   accessLevel: rawAccessLevel,
                   rowCause,
                   path: matchedGroup.path,
-                  source: `${shareSchema.shareTable} -> GroupMember`,
+                  source: `${shareSchema.shareTable} -> Group (${matchedGroup.type})`,
                   status: 'supported',
+                  details: extraDetails,
                 });
 
                 evidence.push({
                   id: `share-group-${row.Id}`,
                   category: 'sharing',
                   status: 'supported',
-                  title: `Access via Group: ${matchedGroup.name}`,
-                  explanation: `Share row grants ${rawAccessLevel} to Group/Role "${matchedGroup.name}" (${row.UserOrGroupId}) via ${shareSchema.accessLevelField}. User is confirmed a member via path: ${matchedGroup.path.join(' -> ')}.`,
-                  source: `${shareSchema.shareTable} & GroupMember`,
+                  title,
+                  explanation: `Share row grants ${rawAccessLevel} access to ${matchedGroup.type} "${matchedGroup.name}" (${row.UserOrGroupId}) via ${shareSchema.accessLevelField} (RowCause: ${rowCause}). Target user ${targetUser.name} is confirmed a member via path: ${matchedGroup.path.join(' -> ')}.`,
+                  source: `${shareSchema.shareTable} & Group / GroupMember`,
                   retrievedAt: new Date().toISOString(),
                   targetUserId: targetUser.id,
                   recordId,
@@ -333,7 +460,7 @@ export async function analyzeSharingEvidence(
               }
             }
           } catch (grpErr) {
-            warnings.push(`Group membership resolution partial: ${grpErr instanceof Error ? grpErr.message : String(grpErr)}`);
+            warnings.push(`Group/Role membership resolution partial: ${grpErr instanceof Error ? grpErr.message : String(grpErr)}`);
           }
         }
       } else {
@@ -705,6 +832,71 @@ async function checkOwdBaseline(objectApiName: string): Promise<{ internalSharin
   }
 }
 
+let cachedRoleMap: Map<string, { name: string; parentRoleId?: string }> | null = null;
+
+export function clearRoleHierarchyCache(): void {
+  cachedRoleMap = null;
+}
+
+async function getRoleHierarchyMap(): Promise<Map<string, { name: string; parentRoleId?: string }>> {
+  if (cachedRoleMap) return cachedRoleMap;
+  try {
+    const rolesQuery = `
+      SELECT Id, Name, ParentRoleId
+      FROM UserRole
+      LIMIT 1000
+    `;
+    const roles = await sfApi.query<{ Id: string; Name: string; ParentRoleId?: string }>(rolesQuery);
+    const roleMap = new Map<string, { name: string; parentRoleId?: string }>();
+    for (const r of roles) {
+      roleMap.set(r.Id, { name: r.Name, parentRoleId: r.ParentRoleId });
+    }
+    cachedRoleMap = roleMap;
+    return roleMap;
+  } catch {
+    return new Map();
+  }
+}
+
+async function checkRoleIsSubordinate(
+  subordinateRoleId: string,
+  ancestorRoleId: string
+): Promise<{ isSubordinate: boolean; path: string[] }> {
+  if (subordinateRoleId === ancestorRoleId) {
+    return { isSubordinate: true, path: [] };
+  }
+
+  const roleMap = await getRoleHierarchyMap();
+  let currentId: string | undefined = subordinateRoleId;
+  const visited = new Set<string>();
+  const reversedPath: string[] = [];
+
+  const subNode = roleMap.get(subordinateRoleId);
+  if (subNode) {
+    reversedPath.push(subNode.name);
+  }
+
+  while (currentId && !visited.has(currentId) && visited.size < 50) {
+    visited.add(currentId);
+    const node = roleMap.get(currentId);
+    if (!node || !node.parentRoleId) break;
+
+    const parentNode = roleMap.get(node.parentRoleId);
+    const parentName = parentNode?.name || node.parentRoleId;
+    reversedPath.push(parentName);
+
+    if (node.parentRoleId === ancestorRoleId) {
+      return {
+        isSubordinate: true,
+        path: reversedPath.reverse(),
+      };
+    }
+    currentId = node.parentRoleId;
+  }
+
+  return { isSubordinate: false, path: [] };
+}
+
 /**
  * Evaluates whether target user's role is an ancestor of record owner's role in the hierarchy
  */
@@ -736,17 +928,7 @@ async function evaluateRoleHierarchy(
       };
     }
 
-    const rolesQuery = `
-      SELECT Id, Name, ParentRoleId
-      FROM UserRole
-      LIMIT 1000
-    `;
-    const roles = await sfApi.query<{ Id: string; Name: string; ParentRoleId?: string }>(rolesQuery);
-    const roleMap = new Map<string, { name: string; parentRoleId?: string }>();
-    for (const r of roles) {
-      roleMap.set(r.Id, { name: r.Name, parentRoleId: r.ParentRoleId });
-    }
-
+    const roleMap = await getRoleHierarchyMap();
     let currentId: string | undefined = ownerRoleId;
     const visited = new Set<string>();
     const path: string[] = [ownerRoleName];
@@ -779,69 +961,126 @@ async function evaluateRoleHierarchy(
 }
 
 /**
- * Resolves group membership recursively with cycle prevention and depth limit.
+ * Resolves group and role membership recursively with cycle prevention and depth limit.
+ * Explicitly supports:
+ * - Direct Role Groups (Type = 'Role', RelatedId = UserRole.Id)
+ * - Role & Subordinates Groups (Type = 'RoleAndSubordinates', RelatedId = UserRole.Id)
+ * - Queues (Type = 'Queue') containing users OR role groups
+ * - Public Groups (Type = 'Regular') containing users, nested groups, or role groups
+ * - Organization Groups (Type = 'Organization')
  */
-async function resolveGroupMemberships(
+export async function resolveGroupMemberships(
   groupIds: string[],
-  targetUserId: string,
+  targetUser: TargetUser | GroupMembershipTarget,
   maxDepth = 3
-): Promise<Map<string, { name: string; isMember: boolean; path: string[] }>> {
-  const result = new Map<string, { name: string; isMember: boolean; path: string[] }>();
+): Promise<Map<string, ResolvedGroupMembership>> {
+  const result = new Map<string, ResolvedGroupMembership>();
   if (groupIds.length === 0) return result;
 
   const idList = groupIds.map((id) => `'${id}'`).join(',');
   const groupQuery = `
-    SELECT Id, Name, DeveloperName, Type
+    SELECT Id, Name, DeveloperName, Type, RelatedId
     FROM Group
     WHERE Id IN (${idList})
   `;
   const groups = await sfApi.query<GroupRecord>(groupQuery);
   for (const g of groups) {
     result.set(g.Id, {
+      id: g.Id,
       name: g.Name || g.DeveloperName || g.Id,
+      type: g.Type || 'Regular',
       isMember: false,
       path: [],
+      relatedId: g.RelatedId,
     });
   }
 
-  const memberQuery = `
-    SELECT Id, GroupId, UserOrGroupId
-    FROM GroupMember
-    WHERE GroupId IN (${idList})
-  `;
-  const members = await sfApi.query<GroupMemberRecord>(memberQuery);
+  // 1. Evaluate Direct Role & Organization Group Membership
+  // Note: Salesforce NEVER creates rows in GroupMember for Role or RoleAndSubordinates groups.
+  // Membership is evaluated dynamically via User.UserRoleId == Group.RelatedId.
+  for (const g of groups) {
+    const entry = result.get(g.Id);
+    if (!entry) continue;
 
-  const nestedGroupIds: string[] = [];
-
-  for (const m of members) {
-    if (m.UserOrGroupId === targetUserId) {
-      const g = result.get(m.GroupId);
-      if (g) {
-        g.isMember = true;
-        g.path = [g.name, targetUserId];
+    if (g.Type === 'Role' && targetUser.userRoleId && g.RelatedId === targetUser.userRoleId) {
+      entry.isMember = true;
+      entry.path = [`Role: ${entry.name}`, targetUser.name || targetUser.id];
+    } else if (
+      (g.Type === 'RoleAndSubordinates' || g.Type === 'RoleAndSubordinatesInternal') &&
+      targetUser.userRoleId
+    ) {
+      if (g.RelatedId === targetUser.userRoleId) {
+        entry.isMember = true;
+        entry.path = [`Role & Subordinates: ${entry.name}`, targetUser.name || targetUser.id];
+      } else if (g.RelatedId) {
+        const subCheck = await checkRoleIsSubordinate(targetUser.userRoleId, g.RelatedId);
+        if (subCheck.isSubordinate) {
+          entry.isMember = true;
+          const displayRoleChain = subCheck.path.filter((name) => name !== entry.name);
+          entry.path = [`Role & Subordinates: ${entry.name}`, ...displayRoleChain, targetUser.name || targetUser.id];
+        }
       }
-    } else if (m.UserOrGroupId.startsWith('00G') && maxDepth > 0) {
-      nestedGroupIds.push(m.UserOrGroupId);
+    } else if (g.Type === 'Organization') {
+      entry.isMember = true;
+      entry.path = [entry.name || 'All Internal Users', targetUser.name || targetUser.id];
     }
   }
 
-  if (nestedGroupIds.length > 0 && maxDepth > 0) {
-    try {
-      const nestedResults = await resolveGroupMemberships(nestedGroupIds, targetUserId, maxDepth - 1);
-      for (const m of members) {
-        if (m.UserOrGroupId.startsWith('00G')) {
-          const nested = nestedResults.get(m.UserOrGroupId);
-          if (nested && nested.isMember) {
-            const g = result.get(m.GroupId);
-            if (g) {
-              g.isMember = true;
-              g.path = [g.name, ...nested.path];
+  // 2. Query GroupMember for Container Groups (Queues, Public Groups)
+  const containerGroupIds = groups
+    .filter(
+      (g) =>
+        g.Type === 'Queue' ||
+        g.Type === 'Regular' ||
+        !['Role', 'RoleAndSubordinates', 'RoleAndSubordinatesInternal', 'Organization'].includes(g.Type)
+    )
+    .map((g) => `'${g.Id}'`);
+
+  if (containerGroupIds.length > 0) {
+    const memberQuery = `
+      SELECT Id, GroupId, UserOrGroupId
+      FROM GroupMember
+      WHERE GroupId IN (${containerGroupIds.join(',')})
+    `;
+    const members = await sfApi.query<GroupMemberRecord>(memberQuery);
+
+    const nestedGroupIds: string[] = [];
+
+    for (const m of members || []) {
+      if (!m || !m.UserOrGroupId) continue;
+
+      if (m.UserOrGroupId === targetUser.id) {
+        const g = result.get(m.GroupId);
+        if (g && !g.isMember) {
+          g.isMember = true;
+          const prefix = g.type === 'Queue' ? 'Queue: ' : g.type === 'Regular' ? 'Group: ' : '';
+          g.path = [`${prefix}${g.name}`, targetUser.name || targetUser.id];
+        }
+      } else if (m.UserOrGroupId.startsWith('00G') && maxDepth > 0) {
+        nestedGroupIds.push(m.UserOrGroupId);
+      }
+    }
+
+    // 3. Recursively resolve nested groups (nested Public Groups, Queues, OR Role Groups!)
+    if (nestedGroupIds.length > 0 && maxDepth > 0) {
+      try {
+        const nestedResults = await resolveGroupMemberships(nestedGroupIds, targetUser, maxDepth - 1);
+        for (const m of members || []) {
+          if (m && m.UserOrGroupId && m.UserOrGroupId.startsWith('00G')) {
+            const nested = nestedResults.get(m.UserOrGroupId);
+            if (nested && nested.isMember) {
+              const g = result.get(m.GroupId);
+              if (g && !g.isMember) {
+                g.isMember = true;
+                const prefix = g.type === 'Queue' ? 'Queue: ' : g.type === 'Regular' ? 'Group: ' : '';
+                g.path = [`${prefix}${g.name}`, ...nested.path];
+              }
             }
           }
         }
+      } catch {
+        // Soft fail nested recursion
       }
-    } catch {
-      // Soft fail nested recursion
     }
   }
 

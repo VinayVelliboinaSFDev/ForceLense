@@ -41,15 +41,23 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
   const isDirectOwner = result.sharingFindings.some(
     (f) => f.type === 'ownership' && (f.label === 'Direct Record Owner' || f.label.includes(result.targetUserName))
   );
+  const queueOwnerShare = result.sharingFindings.find(
+    (f) => f.type === 'ownership' && f.rowCause === 'QueueOwner'
+  );
   const directShare = result.sharingFindings.find((f) => f.type === 'share_row');
+  const roleShare = result.sharingFindings.find((f) => f.type === 'role');
   const groupShare = result.sharingFindings.find((f) => f.type === 'group');
   const hierarchyShare = result.sharingFindings.find((f) => f.type === 'hierarchy');
-  const shareFinding = directShare || groupShare || hierarchyShare;
+  const shareFinding = directShare || roleShare || groupShare || hierarchyShare || queueOwnerShare;
 
   const readOrigin = isDirectOwner
     ? 'Direct Record Owner'
+    : queueOwnerShare
+    ? `Queue Owner (${queueOwnerShare.label.replace(/^Queue Member:\s*/, '')})`
     : directShare
     ? `Share Row (${directShare.rowCause || 'Manual'})`
+    : roleShare
+    ? `Role (${roleShare.rowCause || 'Rule'})`
     : groupShare
     ? `Group (${groupShare.rowCause || 'Rule'})`
     : hierarchyShare
@@ -59,6 +67,8 @@ export const NarrativeSummaryCard: React.FC<NarrativeSummaryCardProps> = ({
   const editOrigin = canEdit
     ? isDirectOwner
       ? 'Record Owner'
+      : queueOwnerShare
+      ? `Queue Owner (${queueOwnerShare.label.replace(/^Queue Member:\s*/, '')})`
       : shareFinding
       ? `Share Row (${shareFinding.rowCause || 'Rule'})`
       : 'Read/Write OWD'

@@ -80,25 +80,35 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
   const isDirectOwner = sharingFindings.some(
     (f) => f.type === 'ownership' && (f.label === 'Direct Record Owner' || f.label.includes(targetUserName))
   );
+  const queueOwnerFinding = sharingFindings.find(
+    (f) => f.type === 'ownership' && f.rowCause === 'QueueOwner'
+  );
   const directShare = sharingFindings.find((f) => f.type === 'share_row');
+  const roleShare = sharingFindings.find((f) => f.type === 'role');
   const groupShare = sharingFindings.find((f) => f.type === 'group');
   const hierarchyShare = sharingFindings.find((f) => f.type === 'hierarchy');
   const owdFinding = sharingFindings.find((f) => f.type === 'owd');
 
   if (isDirectOwner) {
     sharingRowFact = `Ownership: ${targetUserName} is the verified OwnerId on this record (grants All access).`;
+  } else if (queueOwnerFinding) {
+    const path = queueOwnerFinding.path && queueOwnerFinding.path.length > 0 ? ` [Chain: ${queueOwnerFinding.path.join(' → ')}]` : '';
+    sharingRowFact = `Queue Ownership: Record is owned by ${queueOwnerFinding.label}. Target user has access as a verified member${path}.`;
   } else if (directShare) {
     sharingRowFact = `Share Row: Found direct share row in ${directShare.source} granting ${directShare.accessLevel} (RowCause: ${directShare.rowCause || 'Manual'}).`;
+  } else if (roleShare) {
+    const path = roleShare.path && roleShare.path.length > 0 ? ` [Chain: ${roleShare.path.join(' → ')}]` : '';
+    sharingRowFact = `Role Share: Matched share row for "${roleShare.label}" granting ${roleShare.accessLevel} (RowCause: ${roleShare.rowCause || 'Rule'})${path}.`;
   } else if (groupShare) {
     const path = groupShare.path && groupShare.path.length > 0 ? ` [Chain: ${groupShare.path.join(' → ')}]` : '';
-    sharingRowFact = `Public Group Share: Matched share row for "${groupShare.label}" granting ${groupShare.accessLevel} (RowCause: ${groupShare.rowCause || 'Rule'})${path}.`;
+    sharingRowFact = `Group / Queue Share: Matched share row for "${groupShare.label}" granting ${groupShare.accessLevel} (RowCause: ${groupShare.rowCause || 'Rule'})${path}.`;
   } else if (hierarchyShare) {
     const path = hierarchyShare.path && hierarchyShare.path.length > 0 ? ` [Role Path: ${hierarchyShare.path.join(' → ')}]` : '';
     sharingRowFact = `Role Hierarchy: Inherited access because user's role is above record owner's role in UserRole hierarchy${path}.`;
   } else if (owdFinding) {
     sharingRowFact = `OWD Baseline: EntityDefinition confirms InternalSharingModel is ${owdFinding.label}.`;
   } else {
-    sharingRowFact = `No share row found on the share table for ${targetUserName} or their assigned groups. Record-level access is governed by OWD or system permissions.`;
+    sharingRowFact = `No share row found on the share table for ${targetUserName} or their assigned groups/roles. Record-level access is governed by OWD or system permissions.`;
   }
 
   // 3. Object-level CRUD Fact
@@ -168,6 +178,29 @@ export function generateNarrativeSummary(result: AnalysisResult): ExactAccessPro
               const cleanGrp = p.replace(/^(Group|Public Group):\s*/i, '').trim();
               if (cleanGrp) groupsSet.add(cleanGrp);
             }
+          }
+        }
+      }
+
+      addSharingSetting(
+        finding.source ? finding.source.split(' ')[0] : `${objectApiName}Share`,
+        finding.rowCause ? `Rule (${finding.rowCause})` : 'Sharing Rule',
+        finding.accessLevel,
+        finding.label
+      );
+    } else if (finding.type === 'role') {
+      const match = finding.label.match(/Role.*?Share:?\s*(.*?)(?:\s*\(|$)/i) || finding.label.match(/\((.*?)\)/);
+      if (match && match[1]) {
+        rolesSet.add(match[1].trim());
+      } else if (finding.label) {
+        rolesSet.add(finding.label.replace(/^Role.*?Share:?\s*/i, '').trim());
+      }
+
+      if (finding.path && Array.isArray(finding.path)) {
+        for (const p of finding.path) {
+          if (typeof p === 'string' && !p.startsWith('005') && !p.startsWith('00G') && !p.startsWith('00E')) {
+            const cleanRole = p.replace(/^Role:\s*/i, '').replace(/^(Role & Subordinates|RoleAndSubordinates):\s*/i, '').trim();
+            if (cleanRole && cleanRole !== targetUserName) rolesSet.add(cleanRole);
           }
         }
       }
