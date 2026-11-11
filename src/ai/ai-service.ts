@@ -123,6 +123,9 @@ export async function runOllama(prompt: string, endpoint = 'http://localhost:114
     body: JSON.stringify({
       model: model || 'llama3:latest',
       prompt,
+      options: {
+        temperature: 0.1,
+      },
       stream: false,
     }),
   });
@@ -160,6 +163,9 @@ export async function runOllamaChat(
           role: m.role,
           content: m.content,
         })),
+        options: {
+          temperature: 0.1,
+        },
         stream: false,
       }),
     });

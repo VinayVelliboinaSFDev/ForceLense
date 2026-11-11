@@ -24,6 +24,7 @@ Analyze this verified Salesforce REST API evidence for **${targetUserName}** on 
 
 **Output Instructions**:
 Present your answer in a **highly visual, colorful, and rich view** using **Markdown cards, scorecard tables, status badges, emojis, and visual arrows**. Keep it concise, straight, and authoritative (no generic filler or introductory essays). Focus strictly on Record Access, Object CRUD, and Sharing Provenance.
+Always output the exact 4 cards (CARD 1, CARD 2, CARD 3, CARD 4) separated by '---' dividers. In CARD 1, always output the Markdown table format with pipes (|) and status badges (🟢 GRANTED, 🔴 DENIED, 🟡 PARTIAL).
 
 ---
 

@@ -93,4 +93,80 @@ describe('RichAiResponseView Component', () => {
     expect(html).toContain('Sharing Settings');
     expect(html).toContain('Based on record owner');
   });
+
+  it('renders rich cards from Ollama llama3.2:3b even without divider lines (---) and with varying headers', () => {
+    const rawOllamaNoDividers = `### CARD 1: Executive Access Scorecard
+| Capability | Status | Effective Grant | Provenance Origin |
+| --- | --- | --- | --- |
+| Record Read | 🟢 GRANTED | Can View Record | Organization-Wide Defaults |
+| Record Edit | 🔴 DENIED | Edit Blocked | Missing Write Share |
+| Record Delete | 🔴 DENIED | Delete Blocked | Profile Delete CRUD Disabled |
+| Record Transfer | 🔴 DENIED | Transfer Blocked | Transfer Record Permission |
+
+### CARD 2: Visual Provenance Chain
+- Target User: Melissa King (005On000004W1mfIAC)
+- Public Group / Role Membership: None
+- Share Table Grant: Governed by baseline sharing
+- Effective Record Access: MaxAccessLevel: Read
+- Ownership: Melissa King is not the direct record owner.
+- Share Row Evidence: No explicit manual or rule-based share rows exist.
+- Object CRUD Baseline: Melissa holds standard Create and Edit object permissions.
+
+### CARD 3: Discrepancy & Blocker Callout
+While Melissa King's Profile grants global object-level Edit rights for the Case object, Salesforce security architecture enforces a strict intersection model: Object CRUD grants the capability to edit, but Sharing grants access to the specific record.
+
+### CARD 4: Administrator Remediation Tile
+1. Sharing Fix: Navigate to Setup > Sharing Settings and add a Case Sharing Rule granting Read/Write access.
+2. Permission Fix: Navigate to Setup > Profiles and adjust Object Settings.`;
+
+    const html = renderToStaticMarkup(React.createElement(RichAiResponseView, { content: rawOllamaNoDividers }));
+
+    // Verifies all 4 cards are parsed and rendered as rich UI tiles even with NO '---' dividers
+    expect(html).toContain('CARD 1: Executive Access Scorecard');
+    expect(html).toContain('GRANTED');
+    expect(html).toContain('DENIED');
+    expect(html).toContain('CARD 2: Visual Provenance Chain');
+    expect(html).toContain('Melissa King');
+    expect(html).toContain('CARD 3: Discrepancy &amp; Blocker Callout');
+    expect(html).toContain('CARD 4: Administrator Remediation Tile');
+    expect(html).toContain('Sharing Architecture Fix');
+  });
+
+  it('transforms bullet-formatted Card 1 from smaller local models into rich scorecard view', () => {
+    const rawBulletScorecard = `### CARD 1: Executive Access Scorecard
+- 👁️ Record Read: 🟢 GRANTED - Can View Record (Organization-Wide Defaults)
+- ✏️ Record Edit: 🔴 DENIED - Edit Blocked (Missing Write Share)
+- 🗑️ Record Delete: 🔴 DENIED - Delete Blocked (Profile Delete CRUD Disabled)
+- 🔄 Record Transfer: 🔴 DENIED - Transfer Blocked (Transfer Record Permission)
+
+### CARD 3: Discrepancy & Blocker Callout
+Record is Read-only due to Case OWD.`;
+
+    const html = renderToStaticMarkup(React.createElement(RichAiResponseView, { content: rawBulletScorecard }));
+
+    // Verifies bullet list was transformed into rich capability cards with glowing badges
+    expect(html).toContain('Scorecard View');
+    expect(html).toContain('Record Read');
+    expect(html).toContain('Record Edit');
+    expect(html).toContain('GRANTED');
+    expect(html).toContain('DENIED');
+    expect(html).toContain('Organization-Wide Defaults');
+  });
+
+  it('renders Markdown tables inside conversational follow-up turns with rich badges', () => {
+    const tableChatOutput = `Here is a summary of the active sharing rules on this Case:
+
+| Rule Name | Share With | Access Level | RowCause |
+| :--- | :--- | :---: | :--- |
+| Case Tier 2 Escalations | Tier 2 Support Queue | 🟢 GRANTED | Rule |
+| VIP Case Sharing | Executive VIP Group | 🔴 DENIED | Manual |`;
+
+    const html = renderToStaticMarkup(React.createElement(RichAiResponseView, { content: tableChatOutput }));
+
+    expect(html).toContain('Case Tier 2 Escalations');
+    expect(html).toContain('Tier 2 Support Queue');
+    expect(html).toContain('GRANTED');
+    expect(html).toContain('DENIED');
+    expect(html).toContain('<table');
+  });
 });
