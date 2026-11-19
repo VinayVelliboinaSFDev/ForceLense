@@ -141,6 +141,6 @@ export type ExtensionMessage =
   | { type: 'RECORD_DETECTED'; payload: SalesforceRecordContext }
   | { type: 'GET_RECORD_CONTEXT' }
   | { type: 'SET_RECORD_CONTEXT'; payload: SalesforceRecordContext }
-  | { type: 'OPEN_SIDEPANEL' }
+  | { type: 'OPEN_SIDEPANEL'; windowId?: number; tabId?: number }
   | { type: 'AUTH_UPDATED' }
   | { type: 'DISCONNECT_REQUESTED' };

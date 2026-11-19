@@ -1,6 +1,7 @@
 import React from 'react';
 import { Shield, Settings, LogOut, Link2, ExternalLink, FileText, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 import { OrgConnection } from '../types';
+import { openSidePanel } from '../utils/sidepanel';
 
 interface HeaderProps {
   connection: OrgConnection | null;
@@ -9,6 +10,7 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onOpenExport?: () => void;
   onOpenAi?: () => void;
+  onOpenSidePanel?: () => void;
   isPopup?: boolean;
 }
 
@@ -19,13 +21,15 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onOpenExport,
   onOpenAi,
+  onOpenSidePanel,
   isPopup = false,
 }) => {
   const handleOpenSidePanel = () => {
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({ type: 'OPEN_SIDEPANEL' });
-      window.close();
+    if (onOpenSidePanel) {
+      onOpenSidePanel();
+      return;
     }
+    openSidePanel();
   };
 
   return (

@@ -96,31 +96,67 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'OPEN_SIDEPANEL') {
+    const windowId = message.windowId ?? sender.tab?.windowId;
+    const tabId = message.tabId ?? sender.tab?.id;
+
     if (chrome.sidePanel?.open) {
-      const windowId = sender.tab?.windowId;
       if (windowId !== undefined) {
-        chrome.sidePanel.open({ windowId }).then(() => {
-          sendResponse({ success: true });
-        }).catch((err) => {
-          sendResponse({ success: false, error: err.message });
-        });
+        chrome.sidePanel.open({ windowId })
+          .then(() => sendResponse({ success: true }))
+          .catch((err) => {
+            console.warn('sidePanel.open with windowId failed in worker, trying tabId...', err);
+            if (tabId !== undefined) {
+              chrome.sidePanel.open({ tabId })
+                .then(() => sendResponse({ success: true }))
+                .catch((e) => {
+                  console.error('sidePanel.open with tabId also failed:', e);
+                  sendResponse({ success: false, error: e.message });
+                });
+            } else {
+              sendResponse({ success: false, error: err.message });
+            }
+          });
+      } else if (tabId !== undefined) {
+        chrome.sidePanel.open({ tabId })
+          .then(() => sendResponse({ success: true }))
+          .catch((err) => {
+            console.error('sidePanel.open with tabId failed in worker:', err);
+            sendResponse({ success: false, error: err.message });
+          });
       } else {
-        chrome.windows.getCurrent((win) => {
-          if (win.id !== undefined) {
-            chrome.sidePanel.open({ windowId: win.id }).then(() => {
-              sendResponse({ success: true });
-            });
+        chrome.windows.getLastFocused((win) => {
+          if (win?.id !== undefined) {
+            chrome.sidePanel.open({ windowId: win.id })
+              .then(() => sendResponse({ success: true }))
+              .catch((err) => {
+                console.error('sidePanel.open with getLastFocused failed:', err);
+                sendResponse({ success: false, error: err.message });
+              });
+          } else {
+            sendResponse({ success: false, error: 'No active browser window found' });
           }
         });
       }
+    } else {
+      sendResponse({ success: false, error: 'chrome.sidePanel.open is not supported in this browser version' });
     }
     return true;
   }
 });
 
-// Side Panel behavior configuration
+// Side Panel behavior configuration: clicking toolbar icon opens popup, side panel opened via button/API
+if (chrome.sidePanel && 'setPanelBehavior' in chrome.sidePanel) {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+}
+if (chrome.sidePanel && 'setOptions' in chrome.sidePanel) {
+  chrome.sidePanel.setOptions({ path: 'sidepanel.html', enabled: true }).catch(() => {});
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel && 'setPanelBehavior' in chrome.sidePanel) {
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+  }
+  if (chrome.sidePanel && 'setOptions' in chrome.sidePanel) {
+    chrome.sidePanel.setOptions({ path: 'sidepanel.html', enabled: true }).catch(() => {});
   }
 });

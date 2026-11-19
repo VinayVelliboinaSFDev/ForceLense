@@ -7,6 +7,7 @@ import { SalesforceRecordContext, OrgConnection, OrgType } from '../types';
 import { getOrgConnection, disconnectSession } from '../auth/token-store';
 import { initiateOAuthFlow } from '../auth/oauth';
 import { autoDetectSalesforceSession } from '../auth/salesforce-session';
+import { openSidePanel } from '../utils/sidepanel';
 import { ExternalLink, ShieldAlert, Sparkles, CheckCircle2, ArrowRight } from 'lucide-react';
 import { MOCK_ORG_CONNECTION, MOCK_RECORD_CONTEXT } from '../components/MockData';
 
@@ -16,8 +17,20 @@ export const PopupApp: React.FC = () => {
   const [isConnectOpen, setIsConnectOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMockMode, setIsMockMode] = useState(false);
+  const [activeWindowId, setActiveWindowId] = useState<number | undefined>(undefined);
+  const [activeTabId, setActiveTabId] = useState<number | undefined>(undefined);
 
   useEffect(() => {
+    // Proactively cache active window and tab so user gesture token remains valid on click
+    if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        if (tabs && tabs[0]) {
+          if (tabs[0].windowId !== undefined) setActiveWindowId(tabs[0].windowId);
+          if (tabs[0].id !== undefined) setActiveTabId(tabs[0].id);
+        }
+      });
+    }
+
     // Automatically detect active Salesforce session from current tab (Salesforce Inspector style)
     autoDetectSalesforceSession().then((autoRes) => {
       if (autoRes) {
@@ -39,10 +52,7 @@ export const PopupApp: React.FC = () => {
   }, []);
 
   const handleOpenSidePanel = () => {
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({ type: 'OPEN_SIDEPANEL' });
-      window.close();
-    }
+    openSidePanel(activeWindowId, activeTabId);
   };
 
   const handleRefreshContext = () => {
@@ -90,6 +100,7 @@ export const PopupApp: React.FC = () => {
           onOpenConnect={() => setIsConnectOpen(true)}
           onDisconnect={handleDisconnect}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSidePanel={handleOpenSidePanel}
           isPopup={true}
         />
 
